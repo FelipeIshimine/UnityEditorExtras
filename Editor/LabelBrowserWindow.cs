@@ -1,46 +1,69 @@
 ﻿// File: Editor/LabelBrowserWindow.cs
+
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
+using Object = UnityEngine.Object;
 
 public class LabelBrowserWindow : EditorWindow
 {
-    const string PREF_SELECTED_LABEL = "LabelBrowser_SelectedLabel";
-    const float COMPACT_WIDTH = 250f;
+    private const string PREF_SELECTED_LABEL = "LabelBrowser_SelectedLabel";
+    private const float COMPACT_WIDTH = 250f;
+    private const float DRAG_THRESHOLD = 6f;
 
-    class AssetInfo
-    {
-        public UnityEngine.Object asset;
-        public string path;
-        public string folder;
-        public string[] labels;
-    }
+    private List<AssetInfo> _allAssets = new();
+    private ListView _assetListView;
+    private VisualElement _contentContainer;
+    private bool _dragStarted;
+    Dictionary<string, bool> _foldoutStates = new();
+    
+    private bool _isCompact;
 
-    List<AssetInfo> _allAssets = new();
-    List<string> _labels = new();
-
-    string _selectedLabel = "All";
-    string _search = "";
-
-    VisualElement _rootContainer;
-    VisualElement _sidebarContainer;
-    VisualElement _contentContainer;
-
-    ListView _labelListView;
-    ListView _assetListView;
-    ToolbarSearchField _searchField;
-
-    bool _isCompact;
+    private ListView _labelListView;
+    private List<string> _labels = new();
 
     // Drag state
-    bool _mouseDown;
-    bool _dragStarted;
-    Vector2 _mouseDownPos;
-    const float DRAG_THRESHOLD = 6f;
+    private bool _mouseDown;
+    private Vector2 _mouseDownPos;
+
+    private VisualElement _rootContainer;
+    private string _search = "";
+    private ToolbarSearchField _searchField;
+
+    private string _selectedLabel = "All";
+    private VisualElement _sidebarContainer;
+    
+    
+    void OnEnable()
+    {
+        LoadAssets();
+        LoadPrefs();
+        BuildUI();
+        RegisterWindowContextMenu();
+        UpdateLayout();
+    }
+    
+
+    private void OnDisable()
+    {
+        SavePrefs();
+    }
+
+    private void OnGUI()
+    {
+        // Detect width change for responsive layout
+        var shouldCompact = position.width < COMPACT_WIDTH;
+        if (shouldCompact != _isCompact)
+        {
+            _isCompact = shouldCompact;
+            UpdateLayout();
+        }
+    }
 
     [MenuItem("Extras/Label Browser")]
     public static void Open()
@@ -50,33 +73,45 @@ public class LabelBrowserWindow : EditorWindow
         wnd.minSize = new Vector2(400, 300);
     }
 
-    void OnEnable()
+    private void DeleteLabel(string label)
     {
+        if (string.IsNullOrEmpty(label) || label == "All")
+            return;
+
+        if (!EditorUtility.DisplayDialog(
+                "Delete Label",
+                $"Remove label '{label}' from all assets?",
+                "Delete",
+                "Cancel"))
+            return;
+
+        foreach (var assetInfo in _allAssets)
+        {
+            if (!assetInfo.labels.Contains(label))
+                continue;
+
+            var current = AssetDatabase.GetLabels(assetInfo.asset).ToList();
+            current.Remove(label);
+            AssetDatabase.SetLabels(assetInfo.asset, current.ToArray());
+        }
+
+        AssetDatabase.SaveAssets();
+
         LoadAssets();
-        LoadPrefs();
-        BuildUI();
         UpdateLayout();
     }
 
-    void OnDisable()
+    private class AssetInfo
     {
-        SavePrefs();
-    }
-
-    void OnGUI()
-    {
-        // Detect width change for responsive layout
-        bool shouldCompact = position.width < COMPACT_WIDTH;
-        if (shouldCompact != _isCompact)
-        {
-            _isCompact = shouldCompact;
-            UpdateLayout();
-        }
+        public Object asset;
+        public string path;
+        public string folder;
+        public string[] labels;
     }
 
     #region Data
 
-    void LoadAssets()
+    private void LoadAssets()
     {
         _allAssets.Clear();
 
@@ -94,7 +129,7 @@ public class LabelBrowserWindow : EditorWindow
             {
                 asset = asset,
                 path = path,
-                folder = System.IO.Path.GetDirectoryName(path)?.Replace("\\", "/"),
+                folder = Path.GetDirectoryName(path)?.Replace("\\", "/"),
                 labels = labels
             });
         }
@@ -106,13 +141,13 @@ public class LabelBrowserWindow : EditorWindow
         RebuildLabels();
     }
 
-    void RebuildLabels()
+    private void RebuildLabels()
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var a in _allAssets)
-            foreach (var l in a.labels)
-                set.Add(l);
+        foreach (var l in a.labels)
+            set.Add(l);
 
         _labels = set.OrderBy(l => l).ToList();
         _labels.Insert(0, "All");
@@ -125,7 +160,7 @@ public class LabelBrowserWindow : EditorWindow
 
     #region UI
 
-    void BuildUI()
+    private void BuildUI()
     {
         rootVisualElement.Clear();
 
@@ -154,7 +189,7 @@ public class LabelBrowserWindow : EditorWindow
         rootVisualElement.Add(_rootContainer);
     }
 
-    void UpdateLayout()
+    private void UpdateLayout()
     {
         _rootContainer.Clear();
 
@@ -168,7 +203,7 @@ public class LabelBrowserWindow : EditorWindow
 
     #region Wide Mode (Split View)
 
-    void BuildWideLayout()
+    private void BuildWideLayout()
     {
         var main = new VisualElement { style = { flexDirection = FlexDirection.Row, flexGrow = 1 } };
 
@@ -178,7 +213,7 @@ public class LabelBrowserWindow : EditorWindow
             {
                 width = 120,
                 borderRightWidth = 1,
-                borderRightColor = new Color(0,0,0,0.1f),
+                borderRightColor = new Color(0, 0, 0, 0.1f),
                 paddingLeft = 6,
                 paddingTop = 6
             }
@@ -204,6 +239,20 @@ public class LabelBrowserWindow : EditorWindow
             BuildAssetListWide();
         };
 
+        _labelListView.RegisterCallback<ContextClickEvent>(evt =>
+        {
+            var index = _labelListView.selectedIndex;
+            if (index < 0) return;
+
+            var label = _labels[index];
+            if (label == "All") return;
+
+            var menu = new GenericMenu();
+            menu.AddItem(new GUIContent("Delete Label"), false, () => DeleteLabel(label));
+            menu.ShowAsContext();
+        });
+
+
         _sidebarContainer.Add(_labelListView);
         main.Add(_sidebarContainer);
 
@@ -216,7 +265,7 @@ public class LabelBrowserWindow : EditorWindow
         BuildAssetListWide();
     }
 
-    void BuildAssetListWide()
+    private void BuildAssetListWide()
     {
         _contentContainer.Clear();
 
@@ -227,8 +276,23 @@ public class LabelBrowserWindow : EditorWindow
     }
 
     #endregion
+    private void RegisterWindowContextMenu()
+    {
+        rootVisualElement.AddManipulator(new ContextualMenuManipulator(evt =>
+        {
+            evt.menu.AppendAction("Refresh", _ =>
+            {
+                LoadAssets();
+                UpdateLayout();
+            });
 
+            evt.menu.AppendSeparator();
+        }));
+    }
+
+    
     #region Compact Mode (Foldouts)
+
 
     void BuildCompactLayout()
     {
@@ -236,7 +300,28 @@ public class LabelBrowserWindow : EditorWindow
 
         foreach (var label in _labels.Where(l => l != "All"))
         {
-            var foldout = new Foldout { text = label };
+            bool savedState = EditorPrefs.GetBool(GetFoldoutPrefKey(label), false);
+            _foldoutStates[label] = savedState;
+
+            var foldout = new Foldout
+            {
+                text = label,
+                value = savedState
+            };
+
+            foldout.RegisterValueChangedCallback(evt =>
+            {
+                _foldoutStates[label] = evt.newValue;
+                EditorPrefs.SetBool(GetFoldoutPrefKey(label), evt.newValue);
+            });
+
+            foldout.RegisterCallback<ContextClickEvent>(evt =>
+            {
+                var menu = new GenericMenu();
+                menu.AddItem(new GUIContent("Delete Label"), false, () => DeleteLabel(label));
+                menu.ShowAsContext();
+                evt.StopPropagation();
+            });
 
             var assets = GetAssetsForLabel(label);
             var list = CreateAssetListView(assets);
@@ -247,12 +332,17 @@ public class LabelBrowserWindow : EditorWindow
 
         _rootContainer.Add(scroll);
     }
+    
+    string GetFoldoutPrefKey(string label)
+    {
+        return $"LabelBrowser_Foldout_{label}";
+    }
 
     #endregion
 
     #region Asset ListView
 
-    ListView CreateAssetListView(List<AssetInfo> assets)
+    private ListView CreateAssetListView(List<AssetInfo> assets)
     {
         var list = new ListView
         {
@@ -277,21 +367,18 @@ public class LabelBrowserWindow : EditorWindow
         list.bindItem = (e, i) =>
         {
             var info = assets[i];
-            e.Q<Image>().image = AssetPreview.GetMiniThumbnail(info.asset) as Texture2D;
+            e.Q<Image>().image = AssetPreview.GetMiniThumbnail(info.asset);
             e.Q<Label>().text = info.asset.name;
         };
 
-        list.selectionChanged += objs =>
-        {
-            Selection.objects = objs.Cast<AssetInfo>().Select(a => a.asset).ToArray();
-        };
+        list.selectionChanged += objs => { Selection.objects = objs.Cast<AssetInfo>().Select(a => a.asset).ToArray(); };
 
         RegisterDragHandlers(list);
 
         return list;
     }
 
-    List<AssetInfo> GetAssetsForLabel(string label)
+    private List<AssetInfo> GetAssetsForLabel(string label)
     {
         if (!string.IsNullOrEmpty(_search))
         {
@@ -309,7 +396,7 @@ public class LabelBrowserWindow : EditorWindow
             .ToList();
     }
 
-    void RegisterDragHandlers(ListView list)
+    private void RegisterDragHandlers(ListView list)
     {
         list.RegisterCallback<MouseDownEvent>(evt =>
         {
@@ -347,17 +434,17 @@ public class LabelBrowserWindow : EditorWindow
 
     #region Prefs
 
-    void LoadPrefs()
+    private void LoadPrefs()
     {
         _selectedLabel = EditorPrefs.GetString(PREF_SELECTED_LABEL, "All");
     }
 
-    void SavePrefs()
+    private void SavePrefs()
     {
         EditorPrefs.SetString(PREF_SELECTED_LABEL, _selectedLabel ?? "All");
     }
 
-    void SelectLabelInUI()
+    private void SelectLabelInUI()
     {
         var idx = _labels.IndexOf(_selectedLabel);
         if (idx < 0) idx = 0;
