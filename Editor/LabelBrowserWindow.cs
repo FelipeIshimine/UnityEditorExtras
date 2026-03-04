@@ -281,6 +281,7 @@ public class LabelBrowserWindow : EditorWindow
             BuildAssetListWide();
         };
 
+        
         _labelListView.RegisterCallback<ContextClickEvent>(evt =>
         {
             var index = _labelListView.selectedIndex;
@@ -415,6 +416,16 @@ public class LabelBrowserWindow : EditorWindow
 
         list.selectionChanged += objs => { Selection.objects = objs.Cast<AssetInfo>().Select(a => a.asset).ToArray(); };
 
+        list.RegisterCallback<MouseDownEvent>(evt =>
+        {
+            if (evt.button != 0 || evt.clickCount != 2) return;
+
+            var index = list.selectedIndex;
+            if (index < 0 || index >= assets.Count) return;
+
+            AssetDatabase.OpenAsset(assets[index].asset);
+        });
+        
         RegisterDragHandlers(list);
 
         return list;
