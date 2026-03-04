@@ -13,6 +13,8 @@ using Object = UnityEngine.Object;
 public class LabelBrowserWindow : EditorWindow
 {
     private const string PREF_SELECTED_LABEL = "LabelBrowser_SelectedLabel";
+    private const string SESSION_ASSETS = "LabelBrowser_Assets";
+    
     private const float COMPACT_WIDTH = 250f;
     private const float DRAG_THRESHOLD = 6f;
 
@@ -41,14 +43,54 @@ public class LabelBrowserWindow : EditorWindow
     
     void OnEnable()
     {
-        LoadAssets();
+        if (!TryLoadAssetsFromCache())
+            LoadAssets();
+    
         LoadPrefs();
         BuildUI();
         RegisterWindowContextMenu();
         UpdateLayout();
     }
     
+    private bool TryLoadAssetsFromCache()
+    {
+        var json = SessionState.GetString(SESSION_ASSETS, "");
+        if (string.IsNullOrEmpty(json)) return false;
 
+        var cache = JsonUtility.FromJson<AssetInfoCache>(json);
+        if (cache?.paths == null || cache.paths.Count == 0) return false;
+
+        _allAssets.Clear();
+        for (int i = 0; i < cache.paths.Count; i++)
+        {
+            var path = cache.paths[i];
+            var asset = AssetDatabase.LoadMainAssetAtPath(path);
+            if (!asset) continue;
+
+            _allAssets.Add(new AssetInfo
+            {
+                asset = asset,
+                path = path,
+                folder = Path.GetDirectoryName(path)?.Replace("\\", "/"),
+                labels = cache.labelSets[i].Split(';')
+            });
+        }
+
+        RebuildLabels();
+        return true;
+    }
+
+    private void SaveAssetsToCache()
+    {
+        var cache = new AssetInfoCache();
+        foreach (var a in _allAssets)
+        {
+            cache.paths.Add(a.path);
+            cache.labelSets.Add(string.Join(";", a.labels));
+        }
+        SessionState.SetString(SESSION_ASSETS, JsonUtility.ToJson(cache));
+    }
+    
     private void OnDisable()
     {
         SavePrefs();
@@ -133,12 +175,12 @@ public class LabelBrowserWindow : EditorWindow
                 labels = labels
             });
         }
-
         _allAssets = _allAssets
             .OrderBy(a => a.asset.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         RebuildLabels();
+        SaveAssetsToCache();
     }
 
     private void RebuildLabels()
@@ -452,4 +494,10 @@ public class LabelBrowserWindow : EditorWindow
     }
 
     #endregion
-}
+[Serializable]
+private class AssetInfoCache
+{
+    public List<string> paths = new();
+    public List<string> labelSets = new(); // semicolon-joined labels per asset
+}}
+
