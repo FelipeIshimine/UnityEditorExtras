@@ -8,7 +8,8 @@ using UnityEngine.UIElements;
 using Object = UnityEngine.Object;
 
 [CustomEditor(typeof(MonoBehaviour), true, isFallback = true)]
-public class UnityExtrasEditor : Editor
+[CanEditMultipleObjects]
+public class ExtendedInspectorEditor : Editor
 {
     public override VisualElement CreateInspectorGUI()
     {
