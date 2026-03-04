@@ -14,7 +14,7 @@ public class LabelBrowserWindow : EditorWindow
 {
     private const string PREF_SELECTED_LABEL = "LabelBrowser_SelectedLabel";
     private const string SESSION_ASSETS = "LabelBrowser_Assets";
-    
+
     private const float COMPACT_WIDTH = 250f;
     private const float DRAG_THRESHOLD = 6f;
 
@@ -22,8 +22,8 @@ public class LabelBrowserWindow : EditorWindow
     private ListView _assetListView;
     private VisualElement _contentContainer;
     private bool _dragStarted;
-    Dictionary<string, bool> _foldoutStates = new();
-    
+    private Dictionary<string, bool> _foldoutStates = new();
+
     private bool _isCompact;
 
     private ListView _labelListView;
@@ -39,33 +39,44 @@ public class LabelBrowserWindow : EditorWindow
 
     private string _selectedLabel = "All";
     private VisualElement _sidebarContainer;
-    
-    
-    void OnEnable()
+
+
+    private void OnEnable()
     {
         if (!TryLoadAssetsFromCache())
+        {
             LoadAssets();
-    
+        }
+
         LoadPrefs();
         BuildUI();
         RegisterWindowContextMenu();
         UpdateLayout();
     }
-    
+
     private bool TryLoadAssetsFromCache()
     {
         var json = SessionState.GetString(SESSION_ASSETS, "");
-        if (string.IsNullOrEmpty(json)) return false;
+        if (string.IsNullOrEmpty(json))
+        {
+            return false;
+        }
 
         var cache = JsonUtility.FromJson<AssetInfoCache>(json);
-        if (cache?.paths == null || cache.paths.Count == 0) return false;
+        if (cache?.paths == null || cache.paths.Count == 0)
+        {
+            return false;
+        }
 
         _allAssets.Clear();
-        for (int i = 0; i < cache.paths.Count; i++)
+        for (var i = 0; i < cache.paths.Count; i++)
         {
             var path = cache.paths[i];
             var asset = AssetDatabase.LoadMainAssetAtPath(path);
-            if (!asset) continue;
+            if (!asset)
+            {
+                continue;
+            }
 
             _allAssets.Add(new AssetInfo
             {
@@ -88,9 +99,10 @@ public class LabelBrowserWindow : EditorWindow
             cache.paths.Add(a.path);
             cache.labelSets.Add(string.Join(";", a.labels));
         }
+
         SessionState.SetString(SESSION_ASSETS, JsonUtility.ToJson(cache));
     }
-    
+
     private void OnDisable()
     {
         SavePrefs();
@@ -118,19 +130,25 @@ public class LabelBrowserWindow : EditorWindow
     private void DeleteLabel(string label)
     {
         if (string.IsNullOrEmpty(label) || label == "All")
+        {
             return;
+        }
 
         if (!EditorUtility.DisplayDialog(
                 "Delete Label",
                 $"Remove label '{label}' from all assets?",
                 "Delete",
                 "Cancel"))
+        {
             return;
+        }
 
         foreach (var assetInfo in _allAssets)
         {
             if (!assetInfo.labels.Contains(label))
+            {
                 continue;
+            }
 
             var current = AssetDatabase.GetLabels(assetInfo.asset).ToList();
             current.Remove(label);
@@ -159,13 +177,22 @@ public class LabelBrowserWindow : EditorWindow
 
         foreach (var path in AssetDatabase.GetAllAssetPaths())
         {
-            if (!path.StartsWith("Assets")) continue;
+            if (!path.StartsWith("Assets"))
+            {
+                continue;
+            }
 
             var asset = AssetDatabase.LoadMainAssetAtPath(path);
-            if (!asset) continue;
+            if (!asset)
+            {
+                continue;
+            }
 
             var labels = AssetDatabase.GetLabels(asset);
-            if (labels == null || labels.Length == 0) continue;
+            if (labels == null || labels.Length == 0)
+            {
+                continue;
+            }
 
             _allAssets.Add(new AssetInfo
             {
@@ -175,6 +202,7 @@ public class LabelBrowserWindow : EditorWindow
                 labels = labels
             });
         }
+
         _allAssets = _allAssets
             .OrderBy(a => a.asset.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -195,7 +223,9 @@ public class LabelBrowserWindow : EditorWindow
         _labels.Insert(0, "All");
 
         if (!_labels.Contains(_selectedLabel))
+        {
             _selectedLabel = "All";
+        }
     }
 
     #endregion
@@ -236,9 +266,13 @@ public class LabelBrowserWindow : EditorWindow
         _rootContainer.Clear();
 
         if (_isCompact)
+        {
             BuildCompactLayout();
+        }
         else
+        {
             BuildWideLayout();
+        }
     }
 
     #endregion
@@ -274,21 +308,30 @@ public class LabelBrowserWindow : EditorWindow
         _labelListView.selectionChanged += objs =>
         {
             var sel = objs.FirstOrDefault() as string;
-            if (sel == null) return;
+            if (sel == null)
+            {
+                return;
+            }
 
             _selectedLabel = sel;
             EditorPrefs.SetString(PREF_SELECTED_LABEL, _selectedLabel);
             BuildAssetListWide();
         };
 
-        
+
         _labelListView.RegisterCallback<ContextClickEvent>(evt =>
         {
             var index = _labelListView.selectedIndex;
-            if (index < 0) return;
+            if (index < 0)
+            {
+                return;
+            }
 
             var label = _labels[index];
-            if (label == "All") return;
+            if (label == "All")
+            {
+                return;
+            }
 
             var menu = new GenericMenu();
             menu.AddItem(new GUIContent("Delete Label"), false, () => DeleteLabel(label));
@@ -319,6 +362,7 @@ public class LabelBrowserWindow : EditorWindow
     }
 
     #endregion
+
     private void RegisterWindowContextMenu()
     {
         rootVisualElement.AddManipulator(new ContextualMenuManipulator(evt =>
@@ -333,17 +377,16 @@ public class LabelBrowserWindow : EditorWindow
         }));
     }
 
-    
+
     #region Compact Mode (Foldouts)
 
-
-    void BuildCompactLayout()
+    private void BuildCompactLayout()
     {
         var scroll = new ScrollView { style = { flexGrow = 1 } };
 
         foreach (var label in _labels.Where(l => l != "All"))
         {
-            bool savedState = EditorPrefs.GetBool(GetFoldoutPrefKey(label), false);
+            var savedState = EditorPrefs.GetBool(GetFoldoutPrefKey(label), false);
             _foldoutStates[label] = savedState;
 
             var foldout = new Foldout
@@ -375,11 +418,8 @@ public class LabelBrowserWindow : EditorWindow
 
         _rootContainer.Add(scroll);
     }
-    
-    string GetFoldoutPrefKey(string label)
-    {
-        return $"LabelBrowser_Foldout_{label}";
-    }
+
+    private string GetFoldoutPrefKey(string label) => $"LabelBrowser_Foldout_{label}";
 
     #endregion
 
@@ -418,14 +458,20 @@ public class LabelBrowserWindow : EditorWindow
 
         list.RegisterCallback<MouseDownEvent>(evt =>
         {
-            if (evt.button != 0 || evt.clickCount != 2) return;
+            if (evt.button != 0 || evt.clickCount != 2)
+            {
+                return;
+            }
 
             var index = list.selectedIndex;
-            if (index < 0 || index >= assets.Count) return;
+            if (index < 0 || index >= assets.Count)
+            {
+                return;
+            }
 
             AssetDatabase.OpenAsset(assets[index].asset);
         });
-        
+
         RegisterDragHandlers(list);
 
         return list;
@@ -442,7 +488,9 @@ public class LabelBrowserWindow : EditorWindow
         }
 
         if (label == "All")
+        {
             return new List<AssetInfo>(_allAssets);
+        }
 
         return _allAssets
             .Where(a => a.labels.Contains(label))
@@ -453,7 +501,11 @@ public class LabelBrowserWindow : EditorWindow
     {
         list.RegisterCallback<MouseDownEvent>(evt =>
         {
-            if (evt.button != 0) return;
+            if (evt.button != 0)
+            {
+                return;
+            }
+
             _mouseDown = true;
             _dragStarted = false;
             _mouseDownPos = evt.localMousePosition;
@@ -461,13 +513,21 @@ public class LabelBrowserWindow : EditorWindow
 
         list.RegisterCallback<MouseMoveEvent>(evt =>
         {
-            if (!_mouseDown || _dragStarted) return;
+            if (!_mouseDown || _dragStarted)
+            {
+                return;
+            }
 
             if (Vector2.Distance(evt.localMousePosition, _mouseDownPos) < DRAG_THRESHOLD)
+            {
                 return;
+            }
 
             var selected = list.selectedItems.Cast<AssetInfo>().ToArray();
-            if (selected.Length == 0) return;
+            if (selected.Length == 0)
+            {
+                return;
+            }
 
             _dragStarted = true;
 
@@ -500,15 +560,20 @@ public class LabelBrowserWindow : EditorWindow
     private void SelectLabelInUI()
     {
         var idx = _labels.IndexOf(_selectedLabel);
-        if (idx < 0) idx = 0;
+        if (idx < 0)
+        {
+            idx = 0;
+        }
+
         _labelListView?.SetSelection(idx);
     }
 
     #endregion
-[Serializable]
-private class AssetInfoCache
-{
-    public List<string> paths = new();
-    public List<string> labelSets = new(); // semicolon-joined labels per asset
-}}
 
+    [Serializable]
+    private class AssetInfoCache
+    {
+        public List<string> paths = new();
+        public List<string> labelSets = new(); // semicolon-joined labels per asset
+    }
+}

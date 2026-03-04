@@ -26,6 +26,7 @@ public sealed class ButtonAttribute : Attribute
         Layout = layout;
         Validation = validation;
     }
+
     public ButtonAttribute(
         ButtonGroupLayout layout = ButtonGroupLayout.None,
         string groupName = null,
@@ -36,5 +37,4 @@ public sealed class ButtonAttribute : Attribute
         Layout = layout;
         Validation = validation;
     }
-
 }
