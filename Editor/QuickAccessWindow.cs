@@ -19,6 +19,7 @@ public sealed class QuickAccessWindow : EditorWindow
 
     private Type    _selectedType;
     private bool    _showAllComponents;
+    private bool    _compactMode;
 
     // ── UI refs ───────────────────────────────────────────────────────────────
 
@@ -28,6 +29,11 @@ public sealed class QuickAccessWindow : EditorWindow
     private ListView       _objectList;
     private VisualElement  _inspectorContainer;
     private VisualElement  _emptyState;
+    private VisualElement  _contentRow;      // replaces TwoPaneSplitView
+    private VisualElement  _leftPanel;
+    private VisualElement  _rightPanel;
+    private float          _leftPanelWidth = 250f;
+    private Button         _compactToggleBtn;
 
     // ── Colors ────────────────────────────────────────────────────────────────
 
@@ -110,6 +116,7 @@ public sealed class QuickAccessWindow : EditorWindow
         root.Add(BuildSplitView());
 
         PopulateDropdown();
+        ApplyCompactMode();
     }
 
     // ── Toolbar ───────────────────────────────────────────────────────────────
@@ -171,12 +178,71 @@ public sealed class QuickAccessWindow : EditorWindow
 
     private VisualElement BuildSplitView()
     {
-        var split = new TwoPaneSplitView(0, 250, TwoPaneSplitViewOrientation.Horizontal);
-        split.style.flexGrow = 1;
+        _contentRow = new VisualElement();
+        _contentRow.style.flexGrow      = 1;
+        _contentRow.style.flexDirection = FlexDirection.Row;
 
-        split.Add(BuildLeftPanel());
-        split.Add(BuildRightPanel());
-        return split;
+        _leftPanel  = BuildLeftPanel();
+        _rightPanel = BuildRightPanel();
+
+        _contentRow.Add(_leftPanel);
+        _contentRow.Add(_rightPanel);
+        return _contentRow;
+    }
+
+    // Left panel header with compact toggle
+
+    private VisualElement BuildObjectsPanelHeader()
+    {
+        var hdr = new VisualElement();
+        hdr.style.flexDirection   = FlexDirection.Row;
+        hdr.style.alignItems      = Align.Center;
+        hdr.style.backgroundColor = C_HEADER;
+        hdr.style.paddingLeft     = 10;
+        hdr.style.paddingTop      = 5;
+        hdr.style.paddingBottom   = 5;
+        hdr.style.borderBottomWidth = 1;
+        hdr.style.borderBottomColor = C_BORDER;
+
+        var title = new Label("OBJECTS");
+        title.style.fontSize     = 10;
+        title.style.letterSpacing = 1.5f;
+        title.style.unityFontStyleAndWeight = FontStyle.Bold;
+        title.style.color        = C_TEXT_DIM;
+        title.style.flexGrow     = 1;
+
+        _compactToggleBtn = new Button(OnCompactToggleClicked);
+        _compactToggleBtn.text    = "▶";   // will be updated by ApplyCompactMode
+        _compactToggleBtn.tooltip = "Compact mode: hide inspector panel";
+        _compactToggleBtn.style.width        = 18;
+        _compactToggleBtn.style.height       = 18;
+        _compactToggleBtn.style.marginRight  = 2;
+        _compactToggleBtn.style.paddingLeft  = 0;
+        _compactToggleBtn.style.paddingRight = 0;
+        _compactToggleBtn.style.paddingTop   = 0;
+        _compactToggleBtn.style.paddingBottom = 0;
+        _compactToggleBtn.style.fontSize     = 9;
+        _compactToggleBtn.style.unityTextAlign = TextAnchor.MiddleCenter;
+        _compactToggleBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+        _compactToggleBtn.style.color        = C_TEXT_DIM;
+        _compactToggleBtn.style.borderTopWidth = _compactToggleBtn.style.borderRightWidth =
+            _compactToggleBtn.style.borderBottomWidth = _compactToggleBtn.style.borderLeftWidth = 0;
+        SetBorderRadius(_compactToggleBtn.style, 3);
+
+        _compactToggleBtn.RegisterCallback<PointerEnterEvent>(_ =>
+        {
+            _compactToggleBtn.style.color           = C_TEXT;
+            _compactToggleBtn.style.backgroundColor = new Color(C_ACCENT.r, C_ACCENT.g, C_ACCENT.b, 0.15f);
+        });
+        _compactToggleBtn.RegisterCallback<PointerLeaveEvent>(_ =>
+        {
+            _compactToggleBtn.style.color           = _compactMode ? C_ACCENT : C_TEXT_DIM;
+            _compactToggleBtn.style.backgroundColor = new Color(0, 0, 0, 0);
+        });
+
+        hdr.Add(title);
+        hdr.Add(_compactToggleBtn);
+        return hdr;
     }
 
     // Left – object list
@@ -184,11 +250,11 @@ public sealed class QuickAccessWindow : EditorWindow
     private VisualElement BuildLeftPanel()
     {
         var panel = new VisualElement();
-        panel.style.flexGrow        = 1;
-        panel.style.minWidth        = 130;
+        panel.style.width           = _leftPanelWidth;
+        panel.style.flexShrink      = 0;
         panel.style.backgroundColor = C_PANEL_L;
 
-        panel.Add(PanelHeader("OBJECTS"));
+        panel.Add(BuildObjectsPanelHeader());
 
         _objectList = new ListView
         {
@@ -213,7 +279,6 @@ public sealed class QuickAccessWindow : EditorWindow
         row.style.paddingRight  = 6;
 
         // ── dot / ping button ─────────────────────────────────────────────────
-        // The dot doubles as the ping button — click it to center the scene view
         var pingDot = new Button { name = "ping", text = "◆", tooltip = "Ping & focus in Scene / Project" };
         pingDot.style.fontSize        = 7;
         pingDot.style.width           = 16;
@@ -241,20 +306,19 @@ public sealed class QuickAccessWindow : EditorWindow
             pingDot.style.backgroundColor = new Color(0, 0, 0, 0);
         });
 
-        // ── name label (normal state) ─────────────────────────────────────────
+        // ── name label ────────────────────────────────────────────────────────
         var nameLabel = new Label();
         nameLabel.name           = "name";
         nameLabel.style.flexGrow = 1;
         nameLabel.style.fontSize = 12;
         nameLabel.style.color    = C_TEXT;
 
-        // Double-click to enter rename mode
         nameLabel.RegisterCallback<PointerDownEvent>(e =>
         {
             if (e.clickCount == 2) EnterRenameMode(row);
         });
 
-        // ── rename text field (hidden until activated) ────────────────────────
+        // ── rename text field ─────────────────────────────────────────────────
         var renameField = new TextField { name = "rename-field" };
         renameField.style.display      = DisplayStyle.None;
         renameField.style.flexGrow     = 1;
@@ -334,7 +398,6 @@ public sealed class QuickAccessWindow : EditorWindow
         var field  = row.Q<TextField>("rename-field");
         if (nameL == null || field == null || field.style.display == DisplayStyle.None) return;
 
-        // Find bound object via name match (robust across recycled rows)
         int idx = _foundObjects.FindIndex(o => o != null && o.name == nameL.text);
         if (idx >= 0 && !string.IsNullOrEmpty(newName) && newName != nameL.text)
         {
@@ -348,7 +411,6 @@ public sealed class QuickAccessWindow : EditorWindow
             }
             else
             {
-                // GameObject or Component – rename the object itself
                 var target = obj is Component c ? (UnityEngine.Object)c.gameObject : obj;
                 Undo.RecordObject(target, $"Rename {target.name}");
                 target.name = newName;
@@ -377,7 +439,6 @@ public sealed class QuickAccessWindow : EditorWindow
 
     private void BindListItem(VisualElement element, int index)
     {
-        // Always exit rename mode when a row gets reused for a different index
         ExitRenameMode(element);
 
         if (index < 0 || index >= _foundObjects.Count || _foundObjects[index] == null)
@@ -419,14 +480,12 @@ public sealed class QuickAccessWindow : EditorWindow
         var scroll = new ScrollView(ScrollViewMode.Vertical);
         scroll.style.flexGrow = 1;
 
-        // Inspector cards land here
         _inspectorContainer = new VisualElement();
         _inspectorContainer.style.flexGrow  = 1;
         _inspectorContainer.style.paddingLeft   = 6;
         _inspectorContainer.style.paddingRight  = 6;
         _inspectorContainer.style.paddingBottom = 10;
 
-        // Empty state
         _emptyState = BuildEmptyState("Select an object\nto inspect it.");
         _inspectorContainer.Add(_emptyState);
 
@@ -495,7 +554,6 @@ public sealed class QuickAccessWindow : EditorWindow
     {
         DiscoverTypes();
 
-        // Re-build dropdown preserving selection label if possible
         var prevLabel = _typeDropdown.value;
         var choices   = _registeredTypes.Select(GetLabel).ToList();
         _typeDropdown.choices = choices;
@@ -505,6 +563,57 @@ public sealed class QuickAccessWindow : EditorWindow
 
         _selectedType = _typeDropdown.index >= 0 ? _registeredTypes[_typeDropdown.index] : null;
         ScanForObjects();
+    }
+
+    private void OnCompactToggleClicked()
+    {
+        _compactMode = !_compactMode;
+        ApplyCompactMode();
+
+        // If something is already selected, react immediately
+        RefreshInspector();
+    }
+
+    // ── Compact mode ──────────────────────────────────────────────────────────
+
+    private void ApplyCompactMode()
+    {
+        // Button: ▶ means "expand list (hide inspector)", ◀ means "shrink list (show inspector)"
+        _compactToggleBtn.text    = _compactMode ? "◀" : "▶";
+        _compactToggleBtn.tooltip = _compactMode
+            ? "Show inspector panel"
+            : "Hide inspector panel — selection shown in Unity's Inspector";
+        _compactToggleBtn.style.color = _compactMode ? C_ACCENT : C_TEXT_DIM;
+
+        if (_compactMode)
+        {
+            // Save current left panel width before going compact
+            if (_leftPanel.resolvedStyle.width > 10)
+                _leftPanelWidth = _leftPanel.resolvedStyle.width;
+
+            // Left panel fills everything
+            _leftPanel.style.width    = StyleKeyword.Auto;
+            _leftPanel.style.flexGrow = 1;
+
+            // Hide right panel entirely — no empty space left behind
+            _rightPanel.style.display = DisplayStyle.None;
+        }
+        else
+        {
+            // Restore fixed width for left panel
+            _leftPanel.style.flexGrow = 0;
+            _leftPanel.style.width    = _leftPanelWidth;
+
+            // Show right panel
+            _rightPanel.style.display = DisplayStyle.Flex;
+        }
+
+        // Hide All Components toggle in compact mode
+        if (_allComponentsToggle != null)
+            _allComponentsToggle.style.display = _compactMode ? DisplayStyle.None
+                : (_selectedType != null && IsBehaviour(_selectedType) ? DisplayStyle.Flex : DisplayStyle.None);
+
+        minSize = _compactMode ? new Vector2(280, 460) : new Vector2(680, 460);
     }
 
     // ── Scanning ──────────────────────────────────────────────────────────────
@@ -525,13 +634,13 @@ public sealed class QuickAccessWindow : EditorWindow
             foreach (var o in found)
             {
                 if (o != null)
-                {
                     _foundObjects.Add(o);
-                }
             }
 
             _countLabel.text = $"{_foundObjects.Count} object{(_foundObjects.Count == 1 ? "" : "s")} in scene";
-            _allComponentsToggle.style.display = DisplayStyle.Flex;
+
+            if (!_compactMode)
+                _allComponentsToggle.style.display = DisplayStyle.Flex;
         }
         else if (IsScriptable(_selectedType))
         {
@@ -556,30 +665,39 @@ public sealed class QuickAccessWindow : EditorWindow
 
     private void RefreshInspector()
     {
-        ClearInspector();
-
         int idx = _objectList.selectedIndex;
         if (idx < 0 || idx >= _foundObjects.Count || _foundObjects[idx] == null)
         {
-            ShowEmptyState(true);
+            if (!_compactMode) ShowEmptyState(true);
             return;
         }
 
-        ShowEmptyState(false);
         var obj = _foundObjects[idx];
+
+        // ── Compact mode: delegate to Unity's own Inspector ───────────────────
+        if (_compactMode)
+        {
+            UnityEngine.Object target = obj is Component c ? c.gameObject : obj;
+            Selection.activeObject = target;
+            EditorGUIUtility.PingObject(target);
+            return;
+        }
+
+        // ── Embedded inspector ────────────────────────────────────────────────
+        ClearInspector();
+        ShowEmptyState(false);
 
         if (IsBehaviour(_selectedType) && obj is Component comp)
         {
             if (_showAllComponents)
             {
-                // Game Object foldout header
                 AddGameObjectHeader(comp.gameObject);
 
-                foreach (var c in comp.gameObject.GetComponents<Component>())
+                foreach (var c2 in comp.gameObject.GetComponents<Component>())
                 {
-                    if (c == null) continue;
-                    bool isTarget = c.GetType() == _selectedType || _selectedType.IsInstanceOfType(c);
-                    AddInspectorCard(new SerializedObject(c), ObjectNames.NicifyVariableName(c.GetType().Name), isTarget);
+                    if (c2 == null) continue;
+                    bool isTarget = c2.GetType() == _selectedType || _selectedType.IsInstanceOfType(c2);
+                    AddInspectorCard(new SerializedObject(c2), ObjectNames.NicifyVariableName(c2.GetType().Name), isTarget);
                 }
             }
             else
@@ -649,7 +767,6 @@ public sealed class QuickAccessWindow : EditorWindow
             card.style.borderLeftColor = C_ACCENT;
         }
 
-        // Card header
         var hdr = Row(C_CARD_HDR, 10, 6);
         hdr.style.borderBottomWidth = 1;
         hdr.style.borderBottomColor = C_BORDER;
@@ -669,7 +786,6 @@ public sealed class QuickAccessWindow : EditorWindow
         hdr.Add(dot);
         hdr.Add(titleLbl);
 
-        // Ping button on the targeted card only
         if (isTarget && so.targetObject != null)
         {
             var pingBtn = MakePingButton(large: false);
@@ -680,7 +796,6 @@ public sealed class QuickAccessWindow : EditorWindow
 
         card.Add(hdr);
 
-        // Inspector element
         var inspector = new InspectorElement(so);
         inspector.style.paddingLeft   = 2;
         inspector.style.paddingRight  = 2;
@@ -693,7 +808,7 @@ public sealed class QuickAccessWindow : EditorWindow
     private void ClearInspector()
     {
         _inspectorContainer.Clear();
-        _inspectorContainer.Add(_emptyState); // always keep in DOM, toggle visibility
+        _inspectorContainer.Add(_emptyState);
         _emptyState.style.display = DisplayStyle.None;
     }
 
@@ -710,13 +825,9 @@ public sealed class QuickAccessWindow : EditorWindow
 
         UnityEngine.Object target = obj is Component c ? c.gameObject : obj;
 
-        // Highlight in Hierarchy / Project window
         EditorGUIUtility.PingObject(target);
-
-        // Select so the default Inspector updates
         Selection.activeObject = target;
 
-        // Center the Scene View on the object (behaviours only)
         if (target is GameObject go)
         {
             var scene = SceneView.lastActiveSceneView;
