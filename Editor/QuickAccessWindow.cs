@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.Profiling.Memory.Experimental;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -117,6 +118,22 @@ public sealed class QuickAccessWindow : EditorWindow
 
         PopulateDropdown();
         ApplyCompactMode();
+        
+        // F3 anywhere in the window → focus the type dropdown
+        root.RegisterCallback<KeyDownEvent>(e =>
+        {
+            if (e.keyCode == KeyCode.F3)
+            {
+                _typeDropdown.Focus();
+                
+                // DropdownField has no public open API — call the internal ShowMenu via reflection
+                typeof(DropdownField)
+                    .GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?.Invoke(_typeDropdown, null);
+                
+                e.StopPropagation();
+            }
+        }, TrickleDown.TrickleDown);
     }
 
     // ── Toolbar ───────────────────────────────────────────────────────────────
@@ -266,6 +283,16 @@ public sealed class QuickAccessWindow : EditorWindow
         _objectList.style.flexGrow = 1;
         _objectList.selectionChanged += _ => RefreshInspector();
 
+        _objectList.RegisterCallback<KeyDownEvent>(e =>
+        {
+            if (e.keyCode != KeyCode.F2) return;
+            int idx = _objectList.selectedIndex;
+            if (idx < 0) return;
+            var row = _objectList.GetRootElementForIndex(idx);
+            if (row != null) EnterRenameMode(row);
+            e.StopPropagation();
+        });
+        
         panel.Add(_objectList);
         return panel;
     }
@@ -317,6 +344,7 @@ public sealed class QuickAccessWindow : EditorWindow
         {
             if (e.clickCount == 2) EnterRenameMode(row);
         });
+       
 
         // ── rename text field ─────────────────────────────────────────────────
         var renameField = new TextField { name = "rename-field" };
@@ -548,8 +576,10 @@ public sealed class QuickAccessWindow : EditorWindow
         if (i < 0 || i >= _registeredTypes.Count) return;
         _selectedType = _registeredTypes[i];
         ScanForObjects();
-    }
 
+        // After confirming a type selection, return focus to the list
+        _objectList.schedule.Execute(() => _objectList.Focus()).StartingIn(50);
+    }
     private void OnRefreshClicked()
     {
         DiscoverTypes();
@@ -570,6 +600,7 @@ public sealed class QuickAccessWindow : EditorWindow
         _compactMode = !_compactMode;
         ApplyCompactMode();
 
+        
         // If something is already selected, react immediately
         RefreshInspector();
     }
@@ -658,6 +689,17 @@ public sealed class QuickAccessWindow : EditorWindow
 
         _objectList.itemsSource = _foundObjects;
         _objectList.Rebuild();
+        
+        ShowEmptyState(_foundObjects.Count == 0);
+
+// Auto-select first item so the user can immediately arrow-key through the list
+        if (_foundObjects.Count > 0)
+        {
+            _objectList.selectedIndex = 0;
+            _objectList.ScrollToItem(0);
+            RefreshInspector();
+        }
+        
         ShowEmptyState(_foundObjects.Count == 0);
     }
 
