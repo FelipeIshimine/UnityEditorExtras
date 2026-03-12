@@ -1,4 +1,18 @@
-﻿{
-  "name": "UnityExtras.Editor",
-  "references":[ "GUID:827d8d88003143d094dc99c6d0f57420" ]
+{
+    "name": "UnityExtras.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:827d8d88003143d094dc99c6d0f57420"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
