@@ -23,7 +23,7 @@ public class SpritePreviewDrawer : PropertyDrawer
         void UpdateImage()
         {
             var sprite = property.objectReferenceValue as Sprite;
-            image.image = sprite ? sprite.texture : null;
+            image.sprite = sprite ? sprite : null;
         }
 
         UpdateImage();
