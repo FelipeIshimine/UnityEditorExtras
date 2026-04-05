@@ -438,9 +438,9 @@ public class LabelBrowserWindow : EditorWindow
         {
             var row = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
 
-            var icon = new Image { style = { width = 25, height = 25, marginRight = 6 } };
-            var label = new Label { style = { unityFontStyleAndWeight = FontStyle.Bold } };
-
+            var icon = new Image { style = { width = 25, height = 25, marginRight = 6, flexShrink = 0} };
+            var label = new Label { style = { unityFontStyleAndWeight = FontStyle.Bold, flexShrink = 1, textOverflow = TextOverflow.Clip } };
+            
             row.Add(icon);
             row.Add(label);
 
