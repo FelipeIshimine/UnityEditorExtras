@@ -2,7 +2,8 @@
     "name": "UnityExtras.Editor",
     "rootNamespace": "",
     "references": [
-        "GUID:827d8d88003143d094dc99c6d0f57420"
+        "GUID:827d8d88003143d094dc99c6d0f57420",
+        "GUID:ca6d88979c3843c3b98f487a811477b1"
     ],
     "includePlatforms": [
         "Editor"
