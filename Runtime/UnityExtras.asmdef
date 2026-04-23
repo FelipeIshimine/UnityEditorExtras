@@ -1,3 +1,4 @@
 ﻿{
-  "name": "UnityExtras"
+  "name": "UnityExtras",
+  "rootNamespace": ""
 }

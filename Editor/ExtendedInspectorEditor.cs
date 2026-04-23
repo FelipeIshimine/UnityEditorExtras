@@ -18,10 +18,49 @@ public class ExtendedInspectorEditor : Editor
         // Draw default inspector (UI Toolkit)
         InspectorElement.FillDefaultInspector(root, serializedObject, this);
 
+        ApplyRequiredValidation(root, serializedObject);
         InjectReadShowInInspector(targets, target, root);
         InjectButtons(targets, target, root);
 
         return root;
+    }
+
+    private static void ApplyRequiredValidation(VisualElement root, SerializedObject so)
+    {
+        // Find all fields that are object references
+        root.Query<PropertyField>().ForEach(field =>
+        {
+            var property = so.FindProperty(field.bindingPath);
+            if (property == null) return;
+
+            // Define validation logic
+            void Validate()
+            {
+                // Refresh property in case it's stale
+                var prop = so.FindProperty(field.bindingPath);
+                if (prop == null) return;
+
+                if (prop.propertyType == SerializedPropertyType.ObjectReference && 
+                    prop.objectReferenceValue == null)
+                {
+                    field.style.borderLeftColor = Color.red;
+                    field.style.borderLeftWidth = 3;
+                    field.tooltip = "This field is REQUIRED but currently unassigned.";
+                }
+                else
+                {
+                    // Reset to default
+                    field.style.borderLeftWidth = 0;
+                    field.tooltip = string.Empty;
+                }
+            }
+
+            // Initial validation
+            Validate();
+
+            // Register for changes
+            field.RegisterValueChangeCallback(_ => Validate());
+        });
     }
 
     public static void InjectButtons(Object[] targets, Object target, VisualElement root)
