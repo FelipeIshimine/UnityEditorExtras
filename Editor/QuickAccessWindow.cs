@@ -7,27 +7,40 @@ using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.Profiling.Memory.Experimental;
+using UnityEditor.Toolbars;
 using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
+
 
 public sealed class QuickAccessWindow : EditorWindow
 {
     // ── State ─────────────────────────────────────────────────────────────────
 
-    private readonly List<Type>              _registeredTypes = new();
-    private readonly List<UnityEngine.Object> _foundObjects   = new();
+    private class QuickAccessItem
+    {
+        public int Id;
+        public Type Type;
+        public UnityEngine.Object Target;
+        public List<QuickAccessItem> Children = new();
+        public bool IsFolder => Target == null;
+        public string Name => IsFolder ? GetLabel(Type) : Target.name;
+    }
 
-    private Type    _selectedType;
+    private readonly List<Type>              _registeredTypes = new();
+    private readonly List<QuickAccessItem>    _treeItems       = new();
+    private readonly Dictionary<int, QuickAccessItem> _idToItem = new();
+    
     private bool    _showAllComponents;
     private bool    _compactMode;
 
     // ── UI refs ───────────────────────────────────────────────────────────────
 
-    private DropdownField  _typeDropdown;
+    private Label          _headerTitle;
     private Toggle         _allComponentsToggle;
     private Label          _countLabel;
-    private ListView       _objectList;
+    private TreeView       _treeView;
+    private MultiColumnListView _tableView;
     private VisualElement  _inspectorContainer;
     private VisualElement  _emptyState;
     private VisualElement  _contentRow;      // replaces TwoPaneSplitView
@@ -54,6 +67,18 @@ public sealed class QuickAccessWindow : EditorWindow
 
     // ── Entry point ───────────────────────────────────────────────────────────
 
+    const string ButtonID = "Game/QuickAccess";
+    [MainToolbarElement(ButtonID, defaultDockPosition = MainToolbarDockPosition.Left)]
+    public static MainToolbarElement CreateButton()
+    {
+	    var content = new MainToolbarContent(
+		    "⚡︎",
+		    "QuickAccessAttribute window");
+
+	    return new MainToolbarButton(content, ShowWindow);
+    }
+
+    
     [MenuItem("Window/Quick Access ⚡")]
     public static void ShowWindow()
     {
@@ -68,6 +93,7 @@ public sealed class QuickAccessWindow : EditorWindow
     {
         DiscoverTypes();
         BuildUI();
+        RefreshTree();
     }
 
     // ── Type discovery ────────────────────────────────────────────────────────
@@ -116,24 +142,7 @@ public sealed class QuickAccessWindow : EditorWindow
         root.Add(BuildOptionsBar());
         root.Add(BuildSplitView());
 
-        PopulateDropdown();
         ApplyCompactMode();
-        
-        // F3 anywhere in the window → focus the type dropdown
-        root.RegisterCallback<KeyDownEvent>(e =>
-        {
-            if (e.keyCode == KeyCode.F3)
-            {
-                _typeDropdown.Focus();
-                
-                // DropdownField has no public open API — call the internal ShowMenu via reflection
-                typeof(DropdownField)
-                    .GetMethod("ShowMenu", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                    ?.Invoke(_typeDropdown, null);
-                
-                e.StopPropagation();
-            }
-        }, TrickleDown.TrickleDown);
     }
 
     // ── Toolbar ───────────────────────────────────────────────────────────────
@@ -149,16 +158,18 @@ public sealed class QuickAccessWindow : EditorWindow
         badge.style.color     = C_ACCENT;
         badge.style.unityTextAlign = TextAnchor.MiddleCenter;
 
-        _typeDropdown = new DropdownField { label = string.Empty };
-        _typeDropdown.style.flexGrow = 1;
-        _typeDropdown.style.marginRight = 8;
+        var titleLabel = new Label("QUICK ACCESS");
+        titleLabel.style.fontSize = 12;
+        titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+        titleLabel.style.color = C_TEXT;
+        titleLabel.style.flexGrow = 1;
 
         var refreshBtn = new Button(OnRefreshClicked) { text = "↺  Refresh" };
         StyleButton(refreshBtn, C_ACCENT);
         refreshBtn.style.width = 90;
 
         bar.Add(badge);
-        bar.Add(_typeDropdown);
+        bar.Add(titleLabel);
         bar.Add(refreshBtn);
         return bar;
     }
@@ -221,12 +232,20 @@ public sealed class QuickAccessWindow : EditorWindow
         hdr.style.borderBottomWidth = 1;
         hdr.style.borderBottomColor = C_BORDER;
 
-        var title = new Label("OBJECTS");
-        title.style.fontSize     = 10;
-        title.style.letterSpacing = 1.5f;
-        title.style.unityFontStyleAndWeight = FontStyle.Bold;
-        title.style.color        = C_TEXT_DIM;
-        title.style.flexGrow     = 1;
+        var collapseBtn = new Button(() => _treeView.CollapseAll()) { text = "▲" };
+        var expandBtn = new Button(() => _treeView.ExpandAll()) { text = "▼" };
+        StyleIconButton(collapseBtn, 18);
+        StyleIconButton(expandBtn, 18);
+        collapseBtn.tooltip = "Collapse All";
+        expandBtn.tooltip = "Expand All";
+
+        _headerTitle = new Label("EXPLORER");
+        _headerTitle.style.fontSize     = 10;
+        _headerTitle.style.letterSpacing = 1.5f;
+        _headerTitle.style.unityFontStyleAndWeight = FontStyle.Bold;
+        _headerTitle.style.color        = C_TEXT_DIM;
+        _headerTitle.style.flexGrow     = 1;
+        _headerTitle.style.marginLeft   = 4;
 
         _compactToggleBtn = new Button(OnCompactToggleClicked);
         _compactToggleBtn.text    = "▶";   // will be updated by ApplyCompactMode
@@ -257,7 +276,9 @@ public sealed class QuickAccessWindow : EditorWindow
             _compactToggleBtn.style.backgroundColor = new Color(0, 0, 0, 0);
         });
 
-        hdr.Add(title);
+        hdr.Add(collapseBtn);
+        hdr.Add(expandBtn);
+        hdr.Add(_headerTitle);
         hdr.Add(_compactToggleBtn);
         return hdr;
     }
@@ -273,226 +294,65 @@ public sealed class QuickAccessWindow : EditorWindow
 
         panel.Add(BuildObjectsPanelHeader());
 
-        _objectList = new ListView
+        _treeView = new TreeView
         {
-            fixedItemHeight = 28,
+            fixedItemHeight = 24,
             selectionType   = SelectionType.Single,
-            makeItem        = MakeListItem,
-            bindItem        = BindListItem,
+            makeItem        = MakeTreeItem,
+            bindItem        = BindTreeItem
         };
-        _objectList.style.flexGrow = 1;
-        _objectList.selectionChanged += _ => RefreshInspector();
+        _treeView.style.flexGrow = 1;
+        _treeView.selectionChanged += _ => RefreshInspector();
 
-        _objectList.RegisterCallback<KeyDownEvent>(e =>
-        {
-            if (e.keyCode != KeyCode.F2) return;
-            int idx = _objectList.selectedIndex;
-            if (idx < 0) return;
-            var row = _objectList.GetRootElementForIndex(idx);
-            if (row != null) EnterRenameMode(row);
-            e.StopPropagation();
-        });
-        
-        panel.Add(_objectList);
+        panel.Add(_treeView);
         return panel;
     }
 
-    private VisualElement MakeListItem()
+    private VisualElement MakeTreeItem()
     {
         var row = new VisualElement();
         row.style.flexDirection = FlexDirection.Row;
         row.style.alignItems    = Align.Center;
-        row.style.paddingLeft   = 10;
-        row.style.paddingRight  = 6;
+        row.style.paddingLeft   = 4;
 
-        // ── dot / ping button ─────────────────────────────────────────────────
-        var pingDot = new Button { name = "ping", text = "◆", tooltip = "Ping & focus in Scene / Project" };
-        pingDot.style.fontSize        = 7;
-        pingDot.style.width           = 16;
-        pingDot.style.height          = 16;
-        pingDot.style.marginRight     = 6;
-        pingDot.style.paddingLeft     = 0;
-        pingDot.style.paddingRight    = 0;
-        pingDot.style.paddingTop      = 0;
-        pingDot.style.paddingBottom   = 0;
-        pingDot.style.backgroundColor = new Color(0, 0, 0, 0);
-        pingDot.style.color           = C_ACCENT;
-        pingDot.style.borderTopWidth  = pingDot.style.borderRightWidth =
-            pingDot.style.borderBottomWidth = pingDot.style.borderLeftWidth = 0;
-        SetBorderRadius(pingDot.style, 2);
-        pingDot.style.unityTextAlign  = TextAnchor.MiddleCenter;
+        var icon = new Label { name = "icon" };
+        icon.style.marginRight = 4;
+        icon.style.fontSize = 12;
 
-        pingDot.RegisterCallback<PointerEnterEvent>(_ =>
-        {
-            pingDot.style.color           = Color.white;
-            pingDot.style.backgroundColor = new Color(C_ACCENT.r, C_ACCENT.g, C_ACCENT.b, 0.25f);
-        });
-        pingDot.RegisterCallback<PointerLeaveEvent>(_ =>
-        {
-            pingDot.style.color           = C_ACCENT;
-            pingDot.style.backgroundColor = new Color(0, 0, 0, 0);
-        });
+        var label = new Label { name = "label" };
+        label.style.fontSize = 12;
+        label.style.color = C_TEXT;
 
-        // ── name label ────────────────────────────────────────────────────────
-        var nameLabel = new Label();
-        nameLabel.name           = "name";
-        nameLabel.style.flexGrow = 1;
-        nameLabel.style.fontSize = 12;
-        nameLabel.style.color    = C_TEXT;
-
-        nameLabel.RegisterCallback<PointerDownEvent>(e =>
-        {
-            if (e.clickCount == 2) EnterRenameMode(row);
-        });
-       
-
-        // ── rename text field ─────────────────────────────────────────────────
-        var renameField = new TextField { name = "rename-field" };
-        renameField.style.display      = DisplayStyle.None;
-        renameField.style.flexGrow     = 1;
-        renameField.style.fontSize     = 12;
-        renameField.style.height       = 20;
-        renameField.style.marginTop    = 0;
-        renameField.style.marginBottom = 0;
-
-        renameField.RegisterCallback<AttachToPanelEvent>(_ =>
-        {
-            var input = renameField.Q(className: "unity-base-field__input");
-            if (input == null) return;
-            input.style.backgroundColor         = new Color(0.10f, 0.10f, 0.10f, 0.85f);
-            input.style.borderTopColor          = C_ACCENT;
-            input.style.borderRightColor        = C_ACCENT;
-            input.style.borderBottomColor       = C_ACCENT;
-            input.style.borderLeftColor         = C_ACCENT;
-            input.style.borderTopWidth          = 1;
-            input.style.borderRightWidth        = 1;
-            input.style.borderBottomWidth       = 1;
-            input.style.borderLeftWidth         = 1;
-            input.style.borderTopLeftRadius     = 3;
-            input.style.borderTopRightRadius    = 3;
-            input.style.borderBottomLeftRadius  = 3;
-            input.style.borderBottomRightRadius = 3;
-        });
-
-        renameField.RegisterCallback<KeyDownEvent>(e =>
-        {
-            if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter)
-            {
-                CommitRename(row, renameField.value.Trim());
-                e.StopPropagation();
-            }
-            else if (e.keyCode == KeyCode.Escape)
-            {
-                CancelRename(row);
-                e.StopPropagation();
-            }
-        });
-
-        renameField.RegisterCallback<FocusOutEvent>(_ => CommitRename(row, renameField.value.Trim()));
-
-        // ── scene/asset tag ───────────────────────────────────────────────────
-        var tag = new Label();
-        tag.name              = "tag";
-        tag.style.fontSize    = 10;
-        tag.style.color       = C_SUBTEXT;
-        tag.style.marginRight = 4;
-
-        row.Add(pingDot);
-        row.Add(nameLabel);
-        row.Add(renameField);
-        row.Add(tag);
+        row.Add(icon);
+        row.Add(label);
         return row;
     }
 
-    // ── Rename helpers ────────────────────────────────────────────────────────
-
-    private void EnterRenameMode(VisualElement row)
+    private void BindTreeItem(VisualElement element, int index)
     {
-        var nameL = row.Q<Label>("name");
-        var field = row.Q<TextField>("rename-field");
-        var tag   = row.Q<Label>("tag");
-        if (nameL == null || field == null) return;
+        var item = _treeView.GetItemDataForIndex<QuickAccessItem>(index);
+        if (item == null) return;
 
-        field.SetValueWithoutNotify(nameL.text);
-        nameL.style.display = DisplayStyle.None;
-        tag.style.display   = DisplayStyle.None;
-        field.style.display = DisplayStyle.Flex;
-        field.schedule.Execute(() => { field.Focus(); field.SelectAll(); }).StartingIn(10);
-    }
+        var icon = element.Q<Label>("icon");
+        var label = element.Q<Label>("label");
 
-    private void CommitRename(VisualElement row, string newName)
-    {
-        var nameL  = row.Q<Label>("name");
-        var field  = row.Q<TextField>("rename-field");
-        if (nameL == null || field == null || field.style.display == DisplayStyle.None) return;
-
-        int idx = _foundObjects.FindIndex(o => o != null && o.name == nameL.text);
-        if (idx >= 0 && !string.IsNullOrEmpty(newName) && newName != nameL.text)
+        label.text = item.Name;
+        if (item.IsFolder)
         {
-            var obj = _foundObjects[idx];
-            Undo.RecordObject(obj, $"Rename {obj.name}");
-            if (obj is ScriptableObject)
-            {
-                string assetPath = AssetDatabase.GetAssetPath(obj);
-                if (!string.IsNullOrEmpty(assetPath))
-                    AssetDatabase.RenameAsset(assetPath, newName);
-            }
-            else
-            {
-                var target = obj is Component c ? (UnityEngine.Object)c.gameObject : obj;
-                Undo.RecordObject(target, $"Rename {target.name}");
-                target.name = newName;
-                if (obj is Component comp2) EditorUtility.SetDirty(comp2.gameObject);
-            }
-            nameL.text = newName;
-            _objectList.RefreshItem(idx);
+            //icon.text = "📁";
+            //icon.text = "📁";
+            //icon.style.color = C_TEXT_DIM;
+            label.style.unityFontStyleAndWeight = FontStyle.Bold;
+        }
+        else
+        {
+            //icon.text = "◈";
+            //icon.style.color = C_ACCENT;
+            label.style.unityFontStyleAndWeight = FontStyle.Normal;
         }
 
-        ExitRenameMode(row);
-    }
-
-    private void CancelRename(VisualElement row) => ExitRenameMode(row);
-
-    private static void ExitRenameMode(VisualElement row)
-    {
-        var nameL = row.Q<Label>("name");
-        var field = row.Q<TextField>("rename-field");
-        var tag   = row.Q<Label>("tag");
-        if (field == null) return;
-
-        field.style.display = DisplayStyle.None;
-        nameL.style.display = DisplayStyle.Flex;
-        tag.style.display   = DisplayStyle.Flex;
-    }
-
-    private void BindListItem(VisualElement element, int index)
-    {
-        ExitRenameMode(element);
-
-        if (index < 0 || index >= _foundObjects.Count || _foundObjects[index] == null)
-            return;
-
-        var obj   = _foundObjects[index];
-        var nameL = element.Q<Label>("name");
-        var tagL  = element.Q<Label>("tag");
-        var pingB = element.Q<Button>("ping");
-
-        if (nameL != null) nameL.text = obj.name;
-
-        if (tagL != null)
-        {
-            tagL.text = (obj is Component comp && _selectedType != null)
-                ? comp.gameObject.scene.name
-                : string.Empty;
-        }
-
-        if (pingB != null)
-        {
-            pingB.clicked -= pingB.userData as Action;
-            Action pingAction = () => PingObject(obj);
-            pingB.userData = pingAction;
-            pingB.clicked += pingAction;
-        }
+        // Support for renaming via context menu or similar if needed later, 
+        // but for now we removed the old Rename helpers that relied on _foundObjects.
     }
 
     // Right – inspector
@@ -505,6 +365,27 @@ public sealed class QuickAccessWindow : EditorWindow
 
         panel.Add(PanelHeader("INSPECTOR"));
 
+        // ── Table View (multi-column list) ────────────────────────────────────
+        _tableView = new MultiColumnListView
+        {
+            fixedItemHeight = 24,
+            headerTitle     = "OBJECTS",
+            showAlternatingRowBackgrounds = AlternatingRowBackground.All,
+            selectionType   = SelectionType.Single
+        };
+        _tableView.style.flexGrow = 1;
+        _tableView.style.display  = DisplayStyle.None;
+        _tableView.onSelectionChange += items =>
+        {
+            var item = items.FirstOrDefault() as QuickAccessItem;
+            if (item != null)
+            {
+                _treeView.SetSelectionById(item.Id);
+                _treeView.ScrollToItemById(item.Id);
+            }
+        };
+
+        // ── Inspector View ────────────────────────────────────────────────────
         var scroll = new ScrollView(ScrollViewMode.Vertical);
         scroll.style.flexGrow = 1;
 
@@ -514,10 +395,12 @@ public sealed class QuickAccessWindow : EditorWindow
         _inspectorContainer.style.paddingRight  = 6;
         _inspectorContainer.style.paddingBottom = 10;
 
-        _emptyState = BuildEmptyState("Select an object\nto inspect it.");
+        _emptyState = BuildEmptyState("Select an item\nto explore.");
         _inspectorContainer.Add(_emptyState);
 
         scroll.Add(_inspectorContainer);
+        
+        panel.Add(_tableView);
         panel.Add(scroll);
         return panel;
     }
@@ -547,61 +430,71 @@ public sealed class QuickAccessWindow : EditorWindow
         return wrap;
     }
 
-    // ── Dropdown population ───────────────────────────────────────────────────
+    // ── Navigation Logic ─────────────────────────────────────────────────────
 
-    private void PopulateDropdown()
+    private void RefreshTree()
     {
-        var choices = _registeredTypes.Select(GetLabel).ToList();
-        _typeDropdown.choices = choices;
-        _typeDropdown.RegisterValueChangedCallback(_ => OnTypeChanged());
+        _treeItems.Clear();
+        _idToItem.Clear();
+        int nextId = 1;
 
-        if (choices.Count > 0)
+        foreach (var type in _registeredTypes)
         {
-            _typeDropdown.index = 0;
-            _selectedType = _registeredTypes[0];
-            ScanForObjects();
+            List<UnityEngine.Object> objects = new();
+            if (IsBehaviour(type))
+            {
+                var found = UnityEngine.Object.FindObjectsByType(type, FindObjectsSortMode.InstanceID);
+                Array.Sort(found, (x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
+                objects.AddRange(found);
+            }
+            else if (IsScriptable(type))
+            {
+                var guids = AssetDatabase.FindAssets($"t:{type.Name}");
+                foreach (var guid in guids)
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(guid);
+                    var asset = AssetDatabase.LoadAssetAtPath(path, type);
+                    if (asset != null) objects.Add(asset);
+                }
+                objects.Sort((x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
+            }
+
+            if (objects.Count == 1)
+            {
+                var leaf = new QuickAccessItem { Id = nextId++, Type = type, Target = objects[0] };
+                _idToItem[leaf.Id] = leaf;
+                _treeItems.Add(leaf);
+            }
+            else
+            {
+                var folder = new QuickAccessItem { Id = nextId++, Type = type };
+                _idToItem[folder.Id] = folder;
+                _treeItems.Add(folder);
+
+                foreach (var obj in objects)
+                {
+                    if (obj == null) continue;
+                    var leaf = new QuickAccessItem { Id = nextId++, Type = type, Target = obj };
+                    _idToItem[leaf.Id] = leaf;
+                    folder.Children.Add(leaf);
+                }
+            }
         }
-        else
-        {
-            _countLabel.text = "No [QuickAccess] types found";
-            _allComponentsToggle.SetEnabled(false);
-        }
+
+        _treeView.SetRootItems(_treeItems.Select(ti => new TreeViewItemData<QuickAccessItem>(ti.Id, ti, ti.Children.Select(c => new TreeViewItemData<QuickAccessItem>(c.Id, c)).ToList())).ToList());
+        _treeView.Rebuild();
     }
 
-    // ── Event handlers ────────────────────────────────────────────────────────
-
-    private void OnTypeChanged()
-    {
-        int i = _typeDropdown.index;
-        if (i < 0 || i >= _registeredTypes.Count) return;
-        _selectedType = _registeredTypes[i];
-        ScanForObjects();
-
-        // After confirming a type selection, return focus to the list
-        _objectList.schedule.Execute(() => _objectList.Focus()).StartingIn(50);
-    }
     private void OnRefreshClicked()
     {
         DiscoverTypes();
-
-        var prevLabel = _typeDropdown.value;
-        var choices   = _registeredTypes.Select(GetLabel).ToList();
-        _typeDropdown.choices = choices;
-
-        int restore = choices.IndexOf(prevLabel);
-        _typeDropdown.index = restore >= 0 ? restore : (choices.Count > 0 ? 0 : -1);
-
-        _selectedType = _typeDropdown.index >= 0 ? _registeredTypes[_typeDropdown.index] : null;
-        ScanForObjects();
+        RefreshTree();
     }
 
     private void OnCompactToggleClicked()
     {
         _compactMode = !_compactMode;
         ApplyCompactMode();
-
-        
-        // If something is already selected, react immediately
         RefreshInspector();
     }
 
@@ -609,7 +502,6 @@ public sealed class QuickAccessWindow : EditorWindow
 
     private void ApplyCompactMode()
     {
-        // Button: ▶ means "expand list (hide inspector)", ◀ means "shrink list (show inspector)"
         _compactToggleBtn.text    = _compactMode ? "◀" : "▶";
         _compactToggleBtn.tooltip = _compactMode
             ? "Show inspector panel"
@@ -618,145 +510,156 @@ public sealed class QuickAccessWindow : EditorWindow
 
         if (_compactMode)
         {
-            // Save current left panel width before going compact
             if (_leftPanel.resolvedStyle.width > 10)
                 _leftPanelWidth = _leftPanel.resolvedStyle.width;
 
-            // Left panel fills everything
             _leftPanel.style.width    = StyleKeyword.Auto;
             _leftPanel.style.flexGrow = 1;
-
-            // Hide right panel entirely — no empty space left behind
             _rightPanel.style.display = DisplayStyle.None;
         }
         else
         {
-            // Restore fixed width for left panel
             _leftPanel.style.flexGrow = 0;
             _leftPanel.style.width    = _leftPanelWidth;
-
-            // Show right panel
             _rightPanel.style.display = DisplayStyle.Flex;
         }
 
-        // Hide All Components toggle in compact mode
         if (_allComponentsToggle != null)
-            _allComponentsToggle.style.display = _compactMode ? DisplayStyle.None
-                : (_selectedType != null && IsBehaviour(_selectedType) ? DisplayStyle.Flex : DisplayStyle.None);
+        {
+            var selected = _treeView.selectedItem as QuickAccessItem;
+            bool isBehaviour = selected != null && !selected.IsFolder && IsBehaviour(selected.Type);
+            _allComponentsToggle.style.display = (_compactMode || !isBehaviour) ? DisplayStyle.None : DisplayStyle.Flex;
+        }
 
         minSize = _compactMode ? new Vector2(280, 460) : new Vector2(680, 460);
     }
 
-    // ── Scanning ──────────────────────────────────────────────────────────────
+    // ── Table View ────────────────────────────────────────────────────────────
 
-    private void ScanForObjects()
+    private void SetupTableView(Type type)
     {
-        _foundObjects.Clear();
-        ClearInspector();
-
-        if (_selectedType == null) return;
-
-        if (IsBehaviour(_selectedType))
-        {
-            var found = UnityEngine.Object.FindObjectsByType(_selectedType, FindObjectsSortMode.InstanceID);
-            
-            Array.Sort(found, (x,y)=> String.Compare(x.name, y.name, StringComparison.Ordinal));
-            
-            foreach (var o in found)
-            {
-                if (o != null)
-                    _foundObjects.Add(o);
-            }
-
-            _countLabel.text = $"{_foundObjects.Count} object{(_foundObjects.Count == 1 ? "" : "s")} in scene";
-
-            if (!_compactMode)
-                _allComponentsToggle.style.display = DisplayStyle.Flex;
-        }
-        else if (IsScriptable(_selectedType))
-        {
-            var guids = AssetDatabase.FindAssets($"t:{_selectedType.Name}");
-            foreach (var guid in guids)
-            {
-                var path  = AssetDatabase.GUIDToAssetPath(guid);
-                var asset = AssetDatabase.LoadAssetAtPath(path, _selectedType);
-                if (asset != null) _foundObjects.Add(asset);
-            }
-
-            _countLabel.text = $"{_foundObjects.Count} asset{(_foundObjects.Count == 1 ? "" : "s")} in project";
-            _allComponentsToggle.style.display = DisplayStyle.None;
-        }
-
-        _objectList.itemsSource = _foundObjects;
-        _objectList.Rebuild();
+        _tableView.columns.Clear();
         
-        ShowEmptyState(_foundObjects.Count == 0);
+        // Name Column
+        var nameCol = new Column { title = "Name", width = 150, stretchable = true };
+        nameCol.makeCell = () => new Label();
+        nameCol.bindCell = (e, i) => ((Label)e).text = ((QuickAccessItem)_tableView.itemsSource[i]).Target.name;
+        _tableView.columns.Add(nameCol);
 
-// Auto-select first item so the user can immediately arrow-key through the list
-        if (_foundObjects.Count > 0)
+        // Discovery of properties for this type
+        if (IsBehaviour(type) || IsScriptable(type))
         {
-            _objectList.selectedIndex = 0;
-            _objectList.ScrollToItem(0);
-            RefreshInspector();
+            var dummy = CreateInstance(type);
+            var so = new SerializedObject(dummy);
+            var prop = so.GetIterator();
+            prop.NextVisible(true); // skip m_Script
+
+            int count = 0;
+            while (prop.NextVisible(false) && count < 3)
+            {
+                string propPath = prop.propertyPath;
+                string propName = prop.displayName;
+                
+                var col = new Column { title = propName, width = 80, stretchable = true };
+                col.makeCell = () => new Label();
+                col.bindCell = (e, i) =>
+                {
+                    var item = (QuickAccessItem)_tableView.itemsSource[i];
+                    if (item.Target == null) return;
+                    var itemSO = new SerializedObject(item.Target);
+                    var itemProp = itemSO.FindProperty(propPath);
+                    ((Label)e).text = itemProp != null ? GetPropertyValueAsString(itemProp) : "—";
+                };
+                _tableView.columns.Add(col);
+                count++;
+            }
+            DestroyImmediate(dummy);
         }
-        
-        ShowEmptyState(_foundObjects.Count == 0);
+    }
+
+    private string GetPropertyValueAsString(SerializedProperty prop)
+    {
+        return prop.propertyType switch
+        {
+            SerializedPropertyType.Integer => prop.intValue.ToString(),
+            SerializedPropertyType.Boolean => prop.boolValue ? "✔" : "✘",
+            SerializedPropertyType.Float => prop.floatValue.ToString("F2"),
+            SerializedPropertyType.String => prop.stringValue,
+            SerializedPropertyType.Color => "#" + ColorUtility.ToHtmlStringRGB(prop.colorValue),
+            SerializedPropertyType.ObjectReference => prop.objectReferenceValue != null ? prop.objectReferenceValue.name : "None",
+            SerializedPropertyType.Enum => prop.enumDisplayNames[prop.enumValueIndex],
+            _ => "..."
+        };
     }
 
     // ── Inspector ─────────────────────────────────────────────────────────────
 
     private void RefreshInspector()
     {
-        int idx = _objectList.selectedIndex;
-        if (idx < 0 || idx >= _foundObjects.Count || _foundObjects[idx] == null)
+        var item = _treeView.selectedItem as QuickAccessItem;
+        if (item == null)
         {
+            _tableView.style.display = DisplayStyle.None;
+            _inspectorContainer.parent.style.display = DisplayStyle.Flex;
             if (!_compactMode) ShowEmptyState(true);
+            _countLabel.text = "—";
             return;
         }
 
-        var obj = _foundObjects[idx];
-
         // ── Compact mode: delegate to Unity's own Inspector ───────────────────
-        if (_compactMode)
+        if (_compactMode && !item.IsFolder)
         {
-            UnityEngine.Object target = obj is Component c ? c.gameObject : obj;
+            UnityEngine.Object target = item.Target is Component c ? c.gameObject : item.Target;
             Selection.activeObject = target;
             EditorGUIUtility.PingObject(target);
             return;
         }
 
-        // ── Embedded inspector ────────────────────────────────────────────────
-        ClearInspector();
-        ShowEmptyState(false);
-
-        if (IsBehaviour(_selectedType) && obj is Component comp)
+        if (item.IsFolder)
         {
-            if (_showAllComponents)
-            {
-                AddGameObjectHeader(comp.gameObject);
+            // Show Table View
+            _inspectorContainer.parent.style.display = DisplayStyle.None;
+            _tableView.style.display = DisplayStyle.Flex;
+            _tableView.itemsSource = item.Children;
+            SetupTableView(item.Type);
+            _tableView.Rebuild();
+            _countLabel.text = $"{item.Children.Count} items";
+            _headerTitle.text = item.Name.ToUpper();
+        }
+        else
+        {
+            // Show Object Inspector
+            _tableView.style.display = DisplayStyle.None;
+            _inspectorContainer.parent.style.display = DisplayStyle.Flex;
+            ClearInspector();
+            ShowEmptyState(false);
+            _countLabel.text = "1 item";
+            _headerTitle.text = item.Target.name.ToUpper();
 
-                foreach (var c2 in comp.gameObject.GetComponents<Component>())
+            if (IsBehaviour(item.Type) && item.Target is Component comp)
+            {
+                if (_showAllComponents)
                 {
-                    if (c2 == null) continue;
-                    bool isTarget = c2.GetType() == _selectedType || _selectedType.IsInstanceOfType(c2);
-                    AddInspectorCard(new SerializedObject(c2), ObjectNames.NicifyVariableName(c2.GetType().Name), isTarget);
+                    AddGameObjectHeader(comp.gameObject);
+                    foreach (var c2 in comp.gameObject.GetComponents<Component>())
+                    {
+                        if (c2 == null) continue;
+                        bool isTarget = c2.GetType() == item.Type || item.Type.IsInstanceOfType(c2);
+                        AddInspectorCard(new SerializedObject(c2), ObjectNames.NicifyVariableName(c2.GetType().Name), isTarget);
+                    }
+                }
+                else
+                {
+                    AddInspectorCard(new SerializedObject(comp), ObjectNames.NicifyVariableName(comp.GetType().Name), true, true);
                 }
             }
-            else
+            else if (IsScriptable(item.Type) && item.Target is ScriptableObject so)
             {
-                AddInspectorCard(new SerializedObject(comp),
-                    ObjectNames.NicifyVariableName(comp.GetType().Name),
-                    isTarget: true,
-                    showHeader: true);
+                AddInspectorCard(new SerializedObject(so), ObjectNames.NicifyVariableName(so.GetType().Name), true, true);
             }
         }
-        else if (IsScriptable(_selectedType) && obj is ScriptableObject so)
-        {
-            AddInspectorCard(new SerializedObject(so),
-                ObjectNames.NicifyVariableName(so.GetType().Name),
-                isTarget: true,
-                showHeader: true);
-        }
+        
+        ApplyCompactMode(); 
     }
 
     private void AddGameObjectHeader(GameObject go)
@@ -1000,3 +903,4 @@ public sealed class QuickAccessWindow : EditorWindow
         if (left   > 0) { s.borderLeftWidth   = left;   s.borderLeftColor   = color; }
     }
 }
+
