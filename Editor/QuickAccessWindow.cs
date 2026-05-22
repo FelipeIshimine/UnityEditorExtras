@@ -375,7 +375,7 @@ public sealed class QuickAccessWindow : EditorWindow
         };
         _tableView.style.flexGrow = 1;
         _tableView.style.display  = DisplayStyle.None;
-        _tableView.onSelectionChange += items =>
+        _tableView.selectionChanged += items =>
         {
             var item = items.FirstOrDefault() as QuickAccessItem;
             if (item != null)
@@ -742,7 +742,7 @@ public sealed class QuickAccessWindow : EditorWindow
         card.Add(hdr);
 
         var inspector = new InspectorElement(so);
-        inspector.style.paddingLeft   = 2;
+        inspector.style.paddingLeft   = 14;
         inspector.style.paddingRight  = 2;
         inspector.style.paddingBottom = 4;
         card.Add(inspector);
