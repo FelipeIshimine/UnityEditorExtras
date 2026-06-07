@@ -2,8 +2,10 @@
 //
 // Press the shortcut (Edit ▸ Shortcuts ▸ "Window/Quick Access Popup", default Ctrl/Cmd+Shift+Q)
 // and a borderless panel folds open from the left edge, hovering above the docked editor.
-// It shows the same [QuickAccess] list; selecting an item swaps the panel to an inspector,
-// and the ◀ arrow returns to the list. The last selection is remembered between opens.
+// Tabs along the top list every [QuickAccess] type that has at least one instance. Selecting a
+// tab shows that type's instances; selecting an instance swaps the body to its inspector while
+// the tabs stay visible. When a type has a single instance the list is skipped and the instance
+// is shown directly. The last selection is remembered between opens.
 // Press the shortcut again, or Esc, to dismiss.
 //
 // Reuses QuickAccessAttribute from the Runtime assembly.
@@ -46,34 +48,32 @@ public sealed class QuickAccessPopup : EditorWindow
     // ── Layout constants ───────────────────────────────────────────────────────
 
     const float CollapsedWidth = 8f;
-    const float ExpandedWidth  = 520f;
+    const float ExpandedWidth  = 620f;
+    const string LastTypeKey   = "QuickAccessPopup.LastType";     // stored in SessionState
     const string LastSelKey    = "QuickAccessPopup.LastSelection"; // stored in SessionState
 
     // ── State ──────────────────────────────────────────────────────────────────
 
-    private class Item
+    private class Group
     {
-        public int Id;
         public Type Type;
-        public UnityEngine.Object Target;
-        public readonly List<Item> Children = new();
-        public bool IsFolder => Target == null;
-        public string Name => IsFolder ? GetLabel(Type) : (Target != null ? Target.name : "<missing>");
-        // Stable identity across rebuilds (Id is regenerated each refresh, so don't persist it).
-        public string Key => $"{Type.FullName}|{(IsFolder ? "" : Name)}";
+        public readonly List<UnityEngine.Object> Objects = new();
+        public Button Tab;
+        public string Label;
     }
 
-    private readonly List<Type> _types = new();
-    private readonly List<Item> _roots = new();
-    private readonly Dictionary<int, Item> _idToItem = new();
+    private readonly List<Group> _groups = new();
+    private Group _activeGroup;
 
     // ── UI refs ────────────────────────────────────────────────────────────────
 
+    private VisualElement _tabBar;
     private VisualElement _listView;
+    private VisualElement _listBody;
     private VisualElement _inspectorView;
-    private TreeView      _treeView;
     private VisualElement _inspectorBody;
     private Label         _inspectorTitle;
+    private Button        _backButton;
 
     private Rect  _targetRect;
     private double _animEnd;
@@ -88,6 +88,8 @@ public sealed class QuickAccessPopup : EditorWindow
     static readonly Color C_TEXT_DIM = new(0.500f, 0.500f, 0.500f);
     static readonly Color C_CARD     = new(0.220f, 0.220f, 0.220f);
     static readonly Color C_CARD_HDR = new(0.175f, 0.175f, 0.175f);
+    static readonly Color C_TAB      = new(0.130f, 0.130f, 0.130f);
+    static readonly Color C_TAB_HOV  = new(0.200f, 0.200f, 0.200f);
 
     // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -101,7 +103,7 @@ public sealed class QuickAccessPopup : EditorWindow
     {
         Discover();
         Build();
-        BuildTree();
+        BuildTabs();
         RestoreLastSelection();
     }
 
@@ -136,24 +138,58 @@ public sealed class QuickAccessPopup : EditorWindow
 
     private void Discover()
     {
-        _types.Clear();
+        _groups.Clear();
+
+        var types = new List<Type>();
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
             try
             {
-                _types.AddRange(asm.GetTypes().Where(t =>
+                types.AddRange(asm.GetTypes().Where(t =>
                     !t.IsAbstract && !t.IsGenericTypeDefinition &&
                     t.GetCustomAttribute<QuickAccessAttribute>(false) != null &&
                     (typeof(Component).IsAssignableFrom(t) || typeof(ScriptableObject).IsAssignableFrom(t))));
             }
             catch { /* skip inaccessible assemblies */ }
         }
-        _types.Sort((a, b) => string.Compare(GetLabel(a), GetLabel(b), StringComparison.OrdinalIgnoreCase));
+        types.Sort((a, b) => string.Compare(GetLabel(a), GetLabel(b), StringComparison.OrdinalIgnoreCase));
+
+        foreach (var type in types)
+        {
+            var objects = CollectObjects(type);
+            if (objects.Count == 0) continue; // tabs with no instances are not shown
+            var group = new Group { Type = type, Label = GetLabel(type) };
+            group.Objects.AddRange(objects);
+            _groups.Add(group);
+        }
+    }
+
+    private static List<UnityEngine.Object> CollectObjects(Type type)
+    {
+        var objects = new List<UnityEngine.Object>();
+        if (IsBehaviour(type))
+        {
+            var found = UnityEngine.Object.FindObjectsByType(type, FindObjectsSortMode.InstanceID);
+            Array.Sort(found, (x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
+            objects.AddRange(found.Where(o => o != null));
+        }
+        else if (IsScriptable(type))
+        {
+            foreach (var guid in AssetDatabase.FindAssets($"t:{type.Name}"))
+            {
+                var asset = AssetDatabase.LoadAssetAtPath(AssetDatabase.GUIDToAssetPath(guid), type);
+                if (asset != null) objects.Add(asset);
+            }
+            objects.Sort((x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
+        }
+        return objects;
     }
 
     private static string GetLabel(Type t) => t.GetCustomAttribute<QuickAccessAttribute>()?.Label ?? t.Name;
     private static bool IsBehaviour(Type t)  => typeof(Component).IsAssignableFrom(t);
     private static bool IsScriptable(Type t) => typeof(ScriptableObject).IsAssignableFrom(t);
+
+    private static string KeyOf(UnityEngine.Object o) => o != null ? o.name : "<missing>";
 
     // ── UI ─────────────────────────────────────────────────────────────────────
 
@@ -168,36 +204,36 @@ public sealed class QuickAccessPopup : EditorWindow
         root.focusable = true;
         root.RegisterCallback<KeyDownEvent>(OnKeyDown, TrickleDown.TrickleDown);
 
-        root.Add(BuildListView());
-        root.Add(BuildInspectorView());
-
-        ShowList();
-        // Grab keyboard focus so Esc works immediately.
-        root.schedule.Execute(() => root.Focus()).StartingIn(50);
-    }
-
-    private VisualElement BuildListView()
-    {
-        _listView = new VisualElement { style = { flexGrow = 1 } };
-
+        // Top header (title + close).
         var hdr = Header();
         var badge = new Label("⚡") { style = { color = C_ACCENT, fontSize = 14, marginRight = 6 } };
         var title = new Label("QUICK ACCESS")
         { style = { fontSize = 11, color = C_TEXT, unityFontStyleAndWeight = FontStyle.Bold, flexGrow = 1, letterSpacing = 1f } };
         var close = IconButton("✕", () => Close());
         hdr.Add(badge); hdr.Add(title); hdr.Add(close);
-        _listView.Add(hdr);
+        root.Add(hdr);
 
-        _treeView = new TreeView
-        {
-            fixedItemHeight = 24,
-            selectionType   = SelectionType.Single,
-            makeItem        = MakeRow,
-            bindItem        = BindRow
-        };
-        _treeView.style.flexGrow = 1;
-        _treeView.selectionChanged += _ => OnSelectionChanged();
-        _listView.Add(_treeView);
+        // Tab bar (always visible).
+        _tabBar = new VisualElement
+        { style = { flexDirection = FlexDirection.Row, flexWrap = Wrap.Wrap, backgroundColor = C_HEADER,
+                    paddingLeft = 4, paddingRight = 4, paddingTop = 4, paddingBottom = 4,
+                    borderBottomWidth = 1, borderBottomColor = C_BORDER } };
+        root.Add(_tabBar);
+
+        root.Add(BuildListView());
+        root.Add(BuildInspectorView());
+
+        // Grab keyboard focus so Esc works immediately.
+        root.schedule.Execute(() => root.Focus()).StartingIn(50);
+    }
+
+    private VisualElement BuildListView()
+    {
+        _listView = new VisualElement { style = { flexGrow = 1, display = DisplayStyle.None } };
+        var scroll = new ScrollView(ScrollViewMode.Vertical) { style = { flexGrow = 1 } };
+        _listBody = new VisualElement { style = { flexGrow = 1, paddingTop = 4 } };
+        scroll.Add(_listBody);
+        _listView.Add(scroll);
         return _listView;
     }
 
@@ -206,12 +242,11 @@ public sealed class QuickAccessPopup : EditorWindow
         _inspectorView = new VisualElement { style = { flexGrow = 1, display = DisplayStyle.None } };
 
         var hdr = Header();
-        var back = IconButton("◀", ShowList);
-        back.tooltip = "Back to list";
+        _backButton = IconButton("◀", ShowList);
+        _backButton.tooltip = "Back to list";
         _inspectorTitle = new Label("INSPECTOR")
         { style = { fontSize = 11, color = C_TEXT, unityFontStyleAndWeight = FontStyle.Bold, flexGrow = 1, marginLeft = 4, letterSpacing = 1f } };
-        var close = IconButton("✕", () => Close());
-        hdr.Add(back); hdr.Add(_inspectorTitle); hdr.Add(close);
+        hdr.Add(_backButton); hdr.Add(_inspectorTitle);
         _inspectorView.Add(hdr);
 
         var scroll = new ScrollView(ScrollViewMode.Vertical) { style = { flexGrow = 1 } };
@@ -220,6 +255,97 @@ public sealed class QuickAccessPopup : EditorWindow
         scroll.Add(_inspectorBody);
         _inspectorView.Add(scroll);
         return _inspectorView;
+    }
+
+    // ── Tabs ───────────────────────────────────────────────────────────────────
+
+    private void BuildTabs()
+    {
+        _tabBar.Clear();
+        foreach (var group in _groups)
+        {
+            var g = group;
+            var tab = new Button(() => SelectTab(g)) { text = g.Label };
+            tab.style.marginLeft = 2; tab.style.marginRight = 2; tab.style.marginTop = 1; tab.style.marginBottom = 1;
+            tab.style.paddingLeft = 10; tab.style.paddingRight = 10; tab.style.paddingTop = 4; tab.style.paddingBottom = 4;
+            tab.style.fontSize = 11;
+            tab.style.borderTopWidth = tab.style.borderRightWidth = tab.style.borderLeftWidth = 0;
+            tab.style.borderBottomWidth = 2;
+            tab.style.borderBottomColor = C_TAB;
+            tab.style.backgroundColor = C_TAB;
+            tab.style.color = C_TEXT_DIM;
+            SetRadius(tab.style, 3);
+            tab.RegisterCallback<PointerEnterEvent>(_ => { if (g != _activeGroup) tab.style.backgroundColor = C_TAB_HOV; });
+            tab.RegisterCallback<PointerLeaveEvent>(_ => { if (g != _activeGroup) tab.style.backgroundColor = C_TAB; });
+            g.Tab = tab;
+            _tabBar.Add(tab);
+        }
+    }
+
+    private void RefreshTabStyles()
+    {
+        foreach (var g in _groups)
+        {
+            bool active = g == _activeGroup;
+            g.Tab.style.backgroundColor = active ? C_CARD : C_TAB;
+            g.Tab.style.borderBottomColor = active ? C_ACCENT : C_TAB;
+            g.Tab.style.color = active ? C_TEXT : C_TEXT_DIM;
+            g.Tab.style.unityFontStyleAndWeight = active ? FontStyle.Bold : FontStyle.Normal;
+        }
+    }
+
+    private void SelectTab(Group group)
+    {
+        _activeGroup = group;
+        SessionState.SetString(LastTypeKey, group.Type.FullName);
+        RefreshTabStyles();
+
+        if (group.Objects.Count == 1)
+        {
+            // Single instance: skip the list and show it directly.
+            SessionState.SetString(LastSelKey, KeyOf(group.Objects[0]));
+            BuildInspector(group.Objects[0]);
+            ShowInspector();
+        }
+        else
+        {
+            BuildList(group);
+            ShowList();
+        }
+    }
+
+    // ── List of instances ──────────────────────────────────────────────────────
+
+    private void BuildList(Group group)
+    {
+        _listBody.Clear();
+        foreach (var obj in group.Objects)
+        {
+            if (obj == null) continue;
+            var o = obj;
+            var row = new Button(() => SelectInstance(o)) { text = o.name };
+            row.style.unityTextAlign = TextAnchor.MiddleLeft;
+            row.style.height = 26;
+            row.style.marginLeft = 4; row.style.marginRight = 4; row.style.marginTop = 1; row.style.marginBottom = 1;
+            row.style.paddingLeft = 10;
+            row.style.fontSize = 12;
+            row.style.color = C_TEXT;
+            row.style.backgroundColor = C_TAB;
+            row.style.borderTopWidth = row.style.borderRightWidth = row.style.borderBottomWidth = row.style.borderLeftWidth = 0;
+            row.style.borderLeftWidth = 3;
+            row.style.borderLeftColor = C_TAB;
+            SetRadius(row.style, 3);
+            row.RegisterCallback<PointerEnterEvent>(_ => { row.style.backgroundColor = C_TAB_HOV; row.style.borderLeftColor = C_ACCENT; });
+            row.RegisterCallback<PointerLeaveEvent>(_ => { row.style.backgroundColor = C_TAB; row.style.borderLeftColor = C_TAB; });
+            _listBody.Add(row);
+        }
+    }
+
+    private void SelectInstance(UnityEngine.Object obj)
+    {
+        SessionState.SetString(LastSelKey, KeyOf(obj));
+        BuildInspector(obj);
+        ShowInspector();
     }
 
     private void ShowList()
@@ -231,113 +357,59 @@ public sealed class QuickAccessPopup : EditorWindow
 
     private void ShowInspector()
     {
+        // Back button only makes sense when there's a list to go back to.
+        _backButton.style.display = (_activeGroup != null && _activeGroup.Objects.Count > 1)
+            ? DisplayStyle.Flex : DisplayStyle.None;
         _listView.style.display = DisplayStyle.None;
         _inspectorView.style.display = DisplayStyle.Flex;
     }
 
-    // ── Tree build ─────────────────────────────────────────────────────────────
-
-    private void BuildTree()
-    {
-        _roots.Clear();
-        _idToItem.Clear();
-        int id = 1;
-
-        foreach (var type in _types)
-        {
-            var objects = new List<UnityEngine.Object>();
-            if (IsBehaviour(type))
-            {
-                var found = UnityEngine.Object.FindObjectsByType(type, FindObjectsSortMode.InstanceID);
-                Array.Sort(found, (x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
-                objects.AddRange(found);
-            }
-            else if (IsScriptable(type))
-            {
-                foreach (var guid in AssetDatabase.FindAssets($"t:{type.Name}"))
-                {
-                    var asset = AssetDatabase.LoadAssetAtPath(AssetDatabase.GUIDToAssetPath(guid), type);
-                    if (asset != null) objects.Add(asset);
-                }
-                objects.Sort((x, y) => string.Compare(x.name, y.name, StringComparison.Ordinal));
-            }
-
-            if (objects.Count == 1)
-            {
-                var leaf = new Item { Id = id++, Type = type, Target = objects[0] };
-                _idToItem[leaf.Id] = leaf;
-                _roots.Add(leaf);
-            }
-            else
-            {
-                var folder = new Item { Id = id++, Type = type };
-                _idToItem[folder.Id] = folder;
-                _roots.Add(folder);
-                foreach (var obj in objects)
-                {
-                    if (obj == null) continue;
-                    var leaf = new Item { Id = id++, Type = type, Target = obj };
-                    _idToItem[leaf.Id] = leaf;
-                    folder.Children.Add(leaf);
-                }
-            }
-        }
-
-        _treeView.SetRootItems(_roots.Select(r =>
-            new TreeViewItemData<Item>(r.Id, r,
-                r.Children.Select(c => new TreeViewItemData<Item>(c.Id, c)).ToList())).ToList());
-        _treeView.Rebuild();
-    }
-
-    private VisualElement MakeRow()
-    {
-        var row = new VisualElement { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center, paddingLeft = 4 } };
-        row.Add(new Label { name = "label", style = { fontSize = 12, color = C_TEXT } });
-        return row;
-    }
-
-    private void BindRow(VisualElement e, int index)
-    {
-        var item = _treeView.GetItemDataForIndex<Item>(index);
-        if (item == null) return;
-        var label = e.Q<Label>("label");
-        label.text = item.Name;
-        label.style.unityFontStyleAndWeight = item.IsFolder ? FontStyle.Bold : FontStyle.Normal;
-    }
-
-    // ── Selection ──────────────────────────────────────────────────────────────
-
-    private void OnSelectionChanged()
-    {
-        if (_treeView.selectedItem is not Item item) return;
-        if (item.IsFolder) { _treeView.ExpandItem(item.Id); return; }
-
-        SessionState.SetString(LastSelKey, item.Key);
-        BuildInspector(item);
-        ShowInspector();
-    }
+    // ── Selection restore ──────────────────────────────────────────────────────
 
     private void RestoreLastSelection()
     {
-        var key = SessionState.GetString(LastSelKey, null);
-        if (string.IsNullOrEmpty(key)) return;
-        var match = _idToItem.Values.FirstOrDefault(i => !i.IsFolder && i.Key == key);
-        if (match == null) return;
-        _treeView.SetSelectionById(match.Id);
-        _treeView.ScrollToItemById(match.Id);
-        BuildInspector(match);
-        ShowInspector();
+        if (_groups.Count == 0) return;
+
+        var typeName = SessionState.GetString(LastTypeKey, null);
+        var group = _groups.FirstOrDefault(g => g.Type.FullName == typeName) ?? _groups[0];
+        _activeGroup = group;
+        RefreshTabStyles();
+
+        if (group.Objects.Count == 1)
+        {
+            BuildInspector(group.Objects[0]);
+            ShowInspector();
+            return;
+        }
+
+        BuildList(group);
+
+        var selKey = SessionState.GetString(LastSelKey, null);
+        var match = !string.IsNullOrEmpty(selKey)
+            ? group.Objects.FirstOrDefault(o => KeyOf(o) == selKey)
+            : null;
+        if (match != null)
+        {
+            BuildInspector(match);
+            ShowInspector();
+        }
+        else
+        {
+            ShowList();
+        }
     }
 
-    private void BuildInspector(Item item)
+    // ── Inspector ──────────────────────────────────────────────────────────────
+
+    private void BuildInspector(UnityEngine.Object target)
     {
         _inspectorBody.Clear();
-        _inspectorTitle.text = item.Name.ToUpper();
-        if (item.Target == null) return;
+        _inspectorTitle.text = (target != null ? target.name : "<missing>").ToUpper();
+        if (target == null) return;
 
-        if (IsBehaviour(item.Type) && item.Target is Component comp)
+        if (target is Component comp)
             AddCard(new SerializedObject(comp), ObjectNames.NicifyVariableName(comp.GetType().Name), comp);
-        else if (IsScriptable(item.Type) && item.Target is ScriptableObject so)
+        else if (target is ScriptableObject so)
             AddCard(new SerializedObject(so), ObjectNames.NicifyVariableName(so.GetType().Name), so);
     }
 
@@ -379,7 +451,9 @@ public sealed class QuickAccessPopup : EditorWindow
             e.StopPropagation();
             Close();
         }
-        else if (e.keyCode == KeyCode.LeftArrow && _inspectorView.style.display == DisplayStyle.Flex)
+        else if (e.keyCode == KeyCode.LeftArrow
+                 && _inspectorView.style.display == DisplayStyle.Flex
+                 && _activeGroup != null && _activeGroup.Objects.Count > 1)
         {
             e.StopPropagation();
             ShowList();
