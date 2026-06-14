@@ -32,6 +32,12 @@ public static class FastPlayButton
                 Debug.LogWarning("[FastPlayButton] No scenes in Build Settings.");
                 return;
             }
+            
+            if(EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            {
+	            EditorSceneManager.SaveOpenScenes();
+            }
+            
             EditorSceneManager.OpenScene(EditorBuildSettings.scenes[0].path);
             EditorApplication.EnterPlaymode();
         }
