@@ -12,8 +12,8 @@ public class OptionalDrawer : PropertyDrawer
         var root = new VisualElement();
         root.style.flexDirection = FlexDirection.Row;
 
-        var enabledProp = property.FindPropertyRelative("_enabled");
-        var valueProp = property.FindPropertyRelative("_value");
+        var enabledProp = property.FindPropertyRelative(nameof(Optional<object>._enabled));
+        var valueProp = property.FindPropertyRelative(nameof(Optional<object>._value));
 
         var propertyField = new PropertyField(valueProp, property.displayName);
         propertyField.style.flexGrow = 1;

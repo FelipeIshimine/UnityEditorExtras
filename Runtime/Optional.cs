@@ -11,8 +11,8 @@
     [Serializable]
     public struct Optional<T>
     {
-        [SerializeField] private bool _enabled;
-        [SerializeField] private T _value;
+        [SerializeField] internal bool _enabled;
+        [SerializeField] internal T _value;
 
         public bool Enabled => _enabled;
         public T Value => _enabled ? _value : default;

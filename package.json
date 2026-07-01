@@ -3,12 +3,18 @@
   "version": "1.0.0",
   "displayName": "Unity Extras",
   "unity": "6000.3",
-  "description": ".",
+  "description": "Runtime and editor utilities for designer-friendly Unity workflows, including inspector drawers, quick access tools, and balance data helpers.",
   "author": {
     "name": "Felipe Ishimine",
     "email": "felipeishimine@gmail.com",
     "url": "https://felipeishimine.github.io/"
   },
   "keywords": [
+    "editor",
+    "inspector",
+    "ui-toolkit",
+    "design-data",
+    "balance",
+    "tools"
   ]
 }
