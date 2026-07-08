@@ -19,14 +19,13 @@ public sealed class InlineDrawer : PropertyDrawer
         }
 
         VisualElement root = new VisualElement();
-        root.style.marginLeft = 2f;
-        root.style.marginTop = 2f;
-        root.style.marginBottom = 2f;
-        root.style.paddingLeft = inline.IndentPixels;
-        root.style.borderLeftWidth = 2f;
-        root.style.borderLeftColor = EditorGUIUtility.isProSkin
-            ? new Color(1f, 1f, 1f, 0.12f)
-            : new Color(0f, 0f, 0f, 0.16f);
+        
+        VisualElement content = new VisualElement();
+        content.style.marginLeft = 8f;
+        content.style.marginTop = 2f;
+        content.style.marginBottom = 2f;
+        content.style.paddingLeft = inline.IndentPixels;
+        content.style.borderLeftWidth = 2f;
 
         if (inline.ShowLabel)
         {
@@ -39,13 +38,14 @@ public sealed class InlineDrawer : PropertyDrawer
             root.Add(label);
         }
 
-        int childCount = AddDirectChildren(property, root);
+        int childCount = AddDirectChildren(property, content);
         if (childCount == 0)
         {
             throw new InvalidOperationException(
                 $"{nameof(InlineAttribute)} requires a field with visible serialized children. Field: {property.propertyPath}.");
         }
 
+        root.Add(content);
         return root;
     }
 
