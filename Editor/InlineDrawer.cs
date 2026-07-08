@@ -38,11 +38,14 @@ public sealed class InlineDrawer : PropertyDrawer
             root.Add(label);
         }
 
-        int childCount = AddDirectChildren(property, content);
-        if (childCount == 0)
+        if (property.hasVisibleChildren)
         {
-            throw new InvalidOperationException(
-                $"{nameof(InlineAttribute)} requires a field with visible serialized children. Field: {property.propertyPath}.");
+	        int childCount = AddDirectChildren(property, content);
+	        if (childCount == 0)
+	        {
+		        throw new InvalidOperationException(
+			        $"{nameof(InlineAttribute)} requires a field with visible serialized children. Field: {property.propertyPath}.");
+	        }   
         }
 
         root.Add(content);
