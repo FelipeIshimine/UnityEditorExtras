@@ -84,6 +84,63 @@ namespace UnityEditorExtras.Runtime
             return Mathf.RoundToInt(normalized * (steps - 1));
         }
 
+        /// <summary>
+        /// Precomputes every step value into a <see cref="Baked"/> snapshot, so a hot path can read the
+        /// curve with an array lookup instead of <see cref="AnimationCurve.Evaluate"/> — which is slow
+        /// under IL2CPP/WebGL and cost ~7 ms/tick when evaluated per entity. Bake once whenever the
+        /// authored values change (typically at load / match start), then reuse the snapshot.
+        /// </summary>
+        public Baked Bake() => new Baked(this);
+
+        /// <summary>
+        /// An immutable, evaluate-free snapshot of a <see cref="BalanceCurve"/>'s discrete step values.
+        /// Reads are array lookups (no <c>AnimationCurve.Evaluate</c>). Rounding and step spacing from the
+        /// source curve are already applied. A <c>default</c> value is un-baked — check <see cref="IsBaked"/>.
+        /// </summary>
+        public readonly struct Baked
+        {
+            private readonly float[] steps;
+
+            internal Baked(BalanceCurve source)
+            {
+                if (source == null)
+                    throw new ArgumentNullException(nameof(source));
+                source.ValidateSteps();
+                steps = new float[source.steps];
+                for (int i = 0; i < source.steps; i++)
+                    steps[i] = source.EvaluateStep(i);
+            }
+
+            public bool IsBaked => steps != null;
+            public int StepCount => steps.Length;
+
+            /// <summary>
+            /// Value at <paramref name="stepIndex"/>, <b>clamped</b> to the authored step range. This is the
+            /// array-lookup equivalent of <c>EvaluateStep(Mathf.Clamp(stepIndex, 0, LastStepIndex))</c> — the
+            /// clamp is built in because callers key on unbounded counts (e.g. army size).
+            /// </summary>
+            public float EvaluateStep(int stepIndex)
+            {
+                int i = stepIndex < 0 ? 0 : (stepIndex >= steps.Length ? steps.Length - 1 : stepIndex);
+                return steps[i];
+            }
+
+            /// <summary>
+            /// Continuous read across the baked step samples (linear interpolation between adjacent steps),
+            /// approximating <see cref="BalanceCurve.EvaluateNormalized"/> at the curve's authored step
+            /// resolution. <paramref name="normalized"/> is clamped to [0, 1].
+            /// </summary>
+            public float EvaluateNormalized(float normalized)
+            {
+                float clamped = normalized < 0f ? 0f : (normalized > 1f ? 1f : normalized);
+                float scaled = clamped * (steps.Length - 1);
+                int lower = (int)scaled;
+                if (lower >= steps.Length - 1)
+                    return steps[steps.Length - 1];
+                return Mathf.LerpUnclamped(steps[lower], steps[lower + 1], scaled - lower);
+            }
+        }
+
         private float ApplyRounding(float value)
         {
             if (roundingMode != BalanceCurveRoundingMode.None && roundingIncrement <= 0f)
