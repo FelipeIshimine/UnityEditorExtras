@@ -1,0 +1,12 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RequireComponentAnalyzer", "RequireComponentAnalyzer\RequireComponentAnalyzer\RequireComponentAnalyzer.csproj", "{B1E7A6B0-6C8B-4A6E-9C36-3B4B7C6E6A6F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RequireComponentAnalyzer.Tests", "RequireComponentAnalyzer\RequireComponentAnalyzer.Tests\RequireComponentAnalyzer.Tests.csproj", "{C2F8B7C1-7D9C-4B7F-8D47-4C5C8D7F7B7A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+	EndGlobalSection
+EndGlobal
