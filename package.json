@@ -2,7 +2,7 @@
   "name": "com.felipe-ishimine.unity-editor-extras",
   "version": "1.0.0",
   "displayName": "Unity Extras",
-  "unity": "6000.3",
+  "unity": "6000.5",
   "description": "Runtime and editor utilities for designer-friendly Unity workflows, including inspector drawers, quick access tools, and balance data helpers.",
   "author": {
     "name": "Felipe Ishimine",
