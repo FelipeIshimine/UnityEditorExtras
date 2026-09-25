@@ -175,6 +175,63 @@ public class LabelBrowserWindow : EditorWindow
     {
         _allAssets.Clear();
 
+        var labelNames = DiscoverLabelNames();
+        var infoByPath = new Dictionary<string, AssetInfo>();
+
+        try
+        {
+            for (var i = 0; i < labelNames.Count; i++)
+            {
+                var label = labelNames[i];
+                EditorUtility.DisplayProgressBar("Label Browser", $"Loading '{label}'...", (float)i / labelNames.Count);
+
+                foreach (var guid in AssetDatabase.FindAssets("l:" + label))
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(guid);
+                    if (!path.StartsWith("Assets"))
+                    {
+                        continue;
+                    }
+
+                    if (!infoByPath.TryGetValue(path, out var info))
+                    {
+                        var asset = AssetDatabase.LoadMainAssetAtPath(path);
+                        if (!asset)
+                        {
+                            continue;
+                        }
+
+                        info = new AssetInfo
+                        {
+                            asset = asset,
+                            path = path,
+                            folder = Path.GetDirectoryName(path)?.Replace("\\", "/"),
+                            labels = Array.Empty<string>()
+                        };
+                        infoByPath[path] = info;
+                    }
+
+                    info.labels = info.labels.Append(label).ToArray();
+                }
+            }
+        }
+        finally
+        {
+            EditorUtility.ClearProgressBar();
+        }
+
+        _allAssets = infoByPath.Values
+            .OrderBy(a => a.asset.name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        RebuildLabels();
+        SaveAssetsToCache();
+    }
+
+    private static List<string> DiscoverLabelNames()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var path in AssetDatabase.GetAllAssetPaths())
         {
             if (!path.StartsWith("Assets"))
@@ -182,33 +239,46 @@ public class LabelBrowserWindow : EditorWindow
                 continue;
             }
 
-            var asset = AssetDatabase.LoadMainAssetAtPath(path);
-            if (!asset)
+            foreach (var label in ReadLabelsFromMeta(path))
             {
-                continue;
+                set.Add(label);
             }
-
-            var labels = AssetDatabase.GetLabels(asset);
-            if (labels == null || labels.Length == 0)
-            {
-                continue;
-            }
-
-            _allAssets.Add(new AssetInfo
-            {
-                asset = asset,
-                path = path,
-                folder = Path.GetDirectoryName(path)?.Replace("\\", "/"),
-                labels = labels
-            });
         }
 
-        _allAssets = _allAssets
-            .OrderBy(a => a.asset.name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        return set.OrderBy(l => l, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
-        RebuildLabels();
-        SaveAssetsToCache();
+    private static List<string> ReadLabelsFromMeta(string assetPath)
+    {
+        var metaPath = assetPath + ".meta";
+        if (!File.Exists(metaPath))
+        {
+            return new List<string>();
+        }
+
+        var labels = new List<string>();
+        var lines = File.ReadAllLines(metaPath);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i] != "labels:")
+            {
+                continue;
+            }
+
+            for (var j = i + 1; j < lines.Length; j++)
+            {
+                if (!lines[j].StartsWith("- "))
+                {
+                    break;
+                }
+
+                labels.Add(lines[j].Substring(2).Trim());
+            }
+
+            break;
+        }
+
+        return labels;
     }
 
     private void RebuildLabels()
@@ -238,7 +308,10 @@ public class LabelBrowserWindow : EditorWindow
 
         var toolbar = new Toolbar();
 
-        _searchField = new ToolbarSearchField();
+        _searchField = new ToolbarSearchField
+        {
+            style = { flexGrow = 1, flexShrink = 1, minWidth = 20 }
+        };
         _searchField.RegisterValueChangedCallback(evt =>
         {
             _search = evt.newValue?.Trim() ?? "";
@@ -249,10 +322,17 @@ public class LabelBrowserWindow : EditorWindow
         {
             LoadAssets();
             UpdateLayout();
-        }) { text = "Refresh" };
+        })
+        {
+            style = { flexShrink = 0, width = 24, height = 20, alignItems = Align.Center, justifyContent = Justify.Center }
+        };
+        refresh.Add(new Image
+        {
+            image = EditorGUIUtility.IconContent("Refresh").image,
+            style = { width = 14, height = 14 }
+        });
 
         toolbar.Add(_searchField);
-        toolbar.Add(new ToolbarSpacer());
         toolbar.Add(refresh);
 
         rootVisualElement.Add(toolbar);
