@@ -1,6 +1,7 @@
-﻿// Place this file inside any Editor/ folder in your project.
+// Place this file inside any Editor/ folder in your project.
 // QuickAccessAttribute.cs must be accessible from this assembly.
 
+using KodachiGames.Markdown.Editor;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -171,6 +172,7 @@ public sealed class QuickAccessWindow : EditorWindow
         bar.Add(badge);
         bar.Add(titleLabel);
         bar.Add(refreshBtn);
+        bar.Add(WindowGuide.Button(typeof(QuickAccessWindow), "quick-access"));
         return bar;
     }
 

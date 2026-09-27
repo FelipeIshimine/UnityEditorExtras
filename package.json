@@ -16,5 +16,8 @@
     "design-data",
     "balance",
     "tools"
-  ]
+  ],
+  "dependencies": {
+    "com.kodachigames.markdown": "0.1.0"
+  }
 }

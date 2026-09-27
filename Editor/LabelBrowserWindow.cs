@@ -1,5 +1,6 @@
-﻿// File: Editor/LabelBrowserWindow.cs
+// File: Editor/LabelBrowserWindow.cs
 
+using KodachiGames.Markdown.Editor;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -254,6 +255,7 @@ public class LabelBrowserWindow : EditorWindow
         toolbar.Add(_searchField);
         toolbar.Add(new ToolbarSpacer());
         toolbar.Add(refresh);
+        toolbar.Add(WindowGuide.ToolbarButton(typeof(LabelBrowserWindow), "label-browser"));
 
         rootVisualElement.Add(toolbar);
 
