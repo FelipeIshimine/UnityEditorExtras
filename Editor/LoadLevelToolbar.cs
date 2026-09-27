@@ -1,5 +1,6 @@
 ﻿using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEditor.Toolbars;
@@ -31,24 +32,29 @@ public static class LoadLevelToolbar
 
     // ── Dropdown menu ─────────────────────────────────────────────────────────
 
-    [MenuItem("Window/General/Switch Scene #TAB")]
+    [MenuItem("Window/General/Switch Scene %#e")]
     static void ShowMenuShortcut()
     {
-        // Try to find a reasonable anchor point. 
-        // If we can't find a focused window, center of screen is a fallback.
-        Rect anchor;
-        if (EditorWindow.focusedWindow != null)
-        {
-            var pos = EditorWindow.focusedWindow.position;
-            anchor = new Rect(pos.width / 2 - 130, 50, 260, 0);
-        }
-        else
-        {
-            anchor = new Rect(Screen.width / 2 - 130, Screen.height / 2 - 170, 260, 0);
-        }
+        if (!GetCursorPos(out var cursor))
+            throw new System.ComponentModel.Win32Exception();
 
-        ShowMenu(anchor);
+        var mouse = new Vector2(cursor.X, cursor.Y) / EditorGUIUtility.pixelsPerPoint;
+        var window = EditorWindow.focusedWindow;
+        if (window != null)
+            mouse -= window.position.position;
+
+        ShowMenu(new Rect(mouse.x, mouse.y, 260, 0));
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct CursorPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern bool GetCursorPos(out CursorPoint point);
 
     static void ShowMenu(Rect dropdownRect)
     {
