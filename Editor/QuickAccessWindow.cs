@@ -103,20 +103,9 @@ public sealed class QuickAccessWindow : EditorWindow
     {
         _registeredTypes.Clear();
 
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            try
-            {
-                var hits = assembly.GetTypes().Where(t =>
-                    !t.IsAbstract &&
-                    !t.IsGenericTypeDefinition &&
-                    t.GetCustomAttribute<QuickAccessAttribute>(false) != null &&
-                    (typeof(Component).IsAssignableFrom(t) || typeof(ScriptableObject).IsAssignableFrom(t)));
-
-                _registeredTypes.AddRange(hits);
-            }
-            catch { /* skip inaccessible assemblies */ }
-        }
+        _registeredTypes.AddRange(TypeCache.GetTypesWithAttribute<QuickAccessAttribute>().Where(t =>
+            !t.IsAbstract && !t.IsGenericTypeDefinition &&
+            (typeof(Component).IsAssignableFrom(t) || typeof(ScriptableObject).IsAssignableFrom(t))));
 
         // Stable alphabetical order
         _registeredTypes.Sort((a, b) =>

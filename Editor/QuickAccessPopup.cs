@@ -141,17 +141,9 @@ public sealed class QuickAccessPopup : EditorWindow
         _groups.Clear();
 
         var types = new List<Type>();
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            try
-            {
-                types.AddRange(asm.GetTypes().Where(t =>
-                    !t.IsAbstract && !t.IsGenericTypeDefinition &&
-                    t.GetCustomAttribute<QuickAccessAttribute>(false) != null &&
-                    (typeof(Component).IsAssignableFrom(t) || typeof(ScriptableObject).IsAssignableFrom(t))));
-            }
-            catch { /* skip inaccessible assemblies */ }
-        }
+        types.AddRange(TypeCache.GetTypesWithAttribute<QuickAccessAttribute>().Where(t =>
+            !t.IsAbstract && !t.IsGenericTypeDefinition &&
+            (typeof(Component).IsAssignableFrom(t) || typeof(ScriptableObject).IsAssignableFrom(t))));
         types.Sort((a, b) => string.Compare(GetLabel(a), GetLabel(b), StringComparison.OrdinalIgnoreCase));
 
         foreach (var type in types)
