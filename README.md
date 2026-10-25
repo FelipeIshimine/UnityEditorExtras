@@ -439,6 +439,48 @@ The package also includes editor-only utilities:
 
 These tools are editor-only and live under the `Editor` assembly.
 
+### Style classes
+
+A **style class constant** is a generated `const string` for one USS class, so code writes
+`card.AddToClassList(Style.UnitCard_Short)` instead of `"unit-card--short"`. A misspelled or
+renamed class is then a compile error, not a card that silently loses its style.
+
+Create a **Style Class Settings** asset (*Create > Unity Extras > Style Class Settings*) and fill
+in:
+
+| Field | Meaning |
+|---|---|
+| Folders | the folders whose `.uss` files are scanned, subfolders included |
+| Class Name | the generated class, `Style` by default |
+| Class Namespace | its namespace; empty for none |
+
+The class is written next to the settings asset as `<Class Name>.cs`, so the asset's folder decides
+which assembly it compiles into. For `.unit-card`, `.unit-card__title-text` and
+`.highlight--candidate` it writes:
+
+```csharp
+namespace Game.UI
+{
+    public static class Style
+    {
+        public const string Highlight_Candidate = "highlight--candidate";
+        public const string UnitCard = "unit-card";
+        public const string UnitCardTitleText = "unit-card__title-text";
+    }
+}
+```
+
+- **Names.** Each class becomes PascalCase. A `--` modifier keeps an underscore before it
+  (`unit-card--short` → `UnitCard_Short`), so it can't collide with a `__` element.
+- **When it runs.** Saving any `.uss` or the settings asset regenerates every settings asset. The file
+  is only rewritten when the list of classes changes, so editing a color doesn't recompile.
+  A settings asset with no folders yet is skipped. *Tools > Unity Extras > Generate Style Classes*
+  (or the asset's **Generate** context menu) runs it by hand.
+- **What is read.** Only selectors, the text outside `{ }`; `url(...)` paths and comments are
+  ignored.
+- **Errors.** Two different classes that would get the same name (`.unit-card`, `.unit_card`), or a
+  class named like the generated class itself, throw and name both. Rename one in the USS.
+
 ## Choosing the Right Helper
 
 Use `BalanceCurve` when the input is an upgrade level, tier, or normalized progression value.
